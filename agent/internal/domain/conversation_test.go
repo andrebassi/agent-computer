@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -122,5 +123,147 @@ func TestSummaryTruncatesAndCountsToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(s, "2 chamada(s)") {
 		t.Fatalf("resumo devia contar as chamadas de ferramenta: %q", s)
+	}
+}
+
+// Comprimir corta a metade antiga e PRESERVA a instrução de sistema.
+//
+// Cortar a instrução removeria as regras de conduta do agente, e o efeito
+// prático seria ele voltar a fazer o que foi proibido — justamente quando o
+// histórico ficou longo e a supervisão humana está mais distante.
+func TestCompactKeepsSystemAndRecentMessages(t *testing.T) {
+	conv := NewConversation("t1", "regras invioláveis")
+	for i := 0; i < 10; i++ {
+		conv.AddUser(fmt.Sprintf("pedido %d", i))
+	}
+	antes := len(conv.Messages)
+
+	if !conv.Compact() {
+		t.Fatal("devia ter comprimido")
+	}
+	if len(conv.Messages) >= antes {
+		t.Fatalf("não encurtou: %d -> %d", antes, len(conv.Messages))
+	}
+	if conv.Messages[0].Role != RoleSystem || conv.Messages[0].Content != "regras invioláveis" {
+		t.Fatalf("a instrução de sistema devia ser preservada: %+v", conv.Messages[0])
+	}
+	// O marcador é mensagem de usuário, e não parte da instrução: anexá-lo ao
+	// sistema faria a instrução crescer a cada compressão.
+	if conv.Messages[1].Role != RoleUser || !strings.Contains(conv.Messages[1].Content, "comprimido") {
+		t.Fatalf("devia haver um marcador de usuário: %+v", conv.Messages[1])
+	}
+	// As mensagens RECENTES são as que ficam — é o trabalho em curso.
+	ultima := conv.Messages[len(conv.Messages)-1]
+	if ultima.Content != "pedido 9" {
+		t.Fatalf("a última mensagem devia sobreviver, veio %q", ultima.Content)
+	}
+}
+
+// Comprimir NÃO pode deixar resultado de ferramenta órfão.
+//
+// A API recusa um turno RoleTool cujo assistant correspondente saiu do
+// histórico — a mesma regra do Trim, e por isso a varredura é compartilhada.
+func TestCompactNeverLeavesOrphanToolResult(t *testing.T) {
+	conv := NewConversation("t1", "regras")
+	for i := 0; i < 6; i++ {
+		conv.AddUser(fmt.Sprintf("pedido %d", i))
+		conv.AddAssistant("", []ToolCall{{ID: fmt.Sprintf("c%d", i), Name: "shell", Arguments: "{}"}})
+		if err := conv.AddToolResult(fmt.Sprintf("c%d", i), "saída"); err != nil {
+			t.Fatalf("preparação falhou: %v", err)
+		}
+	}
+	if !conv.Compact() {
+		t.Fatal("devia ter comprimido")
+	}
+	// Depois do marcador, a primeira mensagem não pode ser resultado de
+	// ferramenta: ela não teria a chamada correspondente.
+	if conv.Messages[2].Role == RoleTool {
+		t.Fatalf("resultado de ferramenta ficou órfão: %+v", conv.Messages[2])
+	}
+}
+
+// Sem o que cortar, devolve false.
+//
+// Se devolvesse true, quem chamou refaria a chamada com o mesmo histórico,
+// receberia o mesmo erro, e "comprime e tenta de novo" viraria laço infinito.
+func TestCompactRefusesWhenAlreadyMinimal(t *testing.T) {
+	casos := []struct {
+		nome string
+		monta func() *Conversation
+	}{
+		{"só sistema", func() *Conversation { return NewConversation("t1", "regras") }},
+		{"sistema e um pedido", func() *Conversation {
+			c := NewConversation("t1", "regras")
+			c.AddUser("faça algo")
+			return c
+		}},
+		{"sistema e dois turnos", func() *Conversation {
+			c := NewConversation("t1", "regras")
+			c.AddUser("faça algo")
+			c.AddAssistant("ok", nil)
+			return c
+		}},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			conv := caso.monta()
+			antes := len(conv.Messages)
+			if conv.Compact() {
+				t.Fatal("não devia comprimir uma conversa mínima")
+			}
+			if len(conv.Messages) != antes {
+				t.Fatalf("mexeu no histórico mesmo recusando: %d -> %d", antes, len(conv.Messages))
+			}
+		})
+	}
+}
+
+// Histórico que é só resultado de ferramenta depois do corte também recusa.
+//
+// A varredura anti-órfão pode consumir tudo que sobrava; devolver true aí
+// entregaria uma conversa sem nada além do marcador.
+func TestCompactRefusesWhenScanConsumesEverything(t *testing.T) {
+	conv := NewConversation("t1", "regras")
+	conv.AddUser("faça algo")
+	conv.AddAssistant("", []ToolCall{{ID: "c1", Name: "shell", Arguments: "{}"}})
+	for i := 0; i < 6; i++ {
+		if err := conv.AddToolResult("c1", "saída"); err != nil {
+			t.Fatalf("preparação falhou: %v", err)
+		}
+	}
+	// Todas as mensagens da metade final são RoleTool: a varredura vai até o fim.
+	if conv.Compact() {
+		t.Fatal("devia recusar quando a varredura consome o histórico inteiro")
+	}
+}
+
+// A varredura anti-órfão é testada direto porque tem uma proteção que nenhum
+// chamador atual alcança.
+//
+// Trim e Compact sempre passam índice positivo — a aritmética dos dois garante
+// isso. A proteção existe para que um chamador futuro erre com um índice ruim em
+// vez de causar pânico de acesso fora do slice, e testá-la aqui é o que impede
+// que ela seja removida por parecer código morto.
+func TestSkipOrphanToolResults(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem}, {Role: RoleUser}, {Role: RoleAssistant},
+		{Role: RoleTool}, {Role: RoleTool}, {Role: RoleUser},
+	}
+	casos := []struct {
+		nome string
+		from int
+		want int
+	}{
+		{"já aponta para não-ferramenta", 1, 1},
+		{"pula dois resultados seguidos", 3, 5},
+		{"índice negativo é tratado como zero", -3, 0},
+		{"além do fim devolve o fim", 99, 99},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			if got := skipOrphanToolResults(messages, caso.from); got != caso.want {
+				t.Fatalf("de %d esperava %d, veio %d", caso.from, caso.want, got)
+			}
+		})
 	}
 }

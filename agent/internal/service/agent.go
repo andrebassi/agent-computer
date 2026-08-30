@@ -116,7 +116,7 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 			return fmt.Errorf("gravando conversa: %w", err)
 		}
 
-		completion, err := a.model.Complete(ctx, conv.Messages, specs)
+		completion, err := a.complete(ctx, conv, specs)
 		if err != nil {
 			_ = task.Fail(fmt.Sprintf("modelo falhou: %v", err), a.clock())
 			_ = a.persist(ctx, task)
@@ -150,6 +150,34 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 	_ = task.Fail(ErrMaxIterations.Error(), a.clock())
 	_ = a.settle(ctx, task, conv)
 	return ErrMaxIterations
+}
+
+// complete chama o modelo e, se a janela de contexto estourar, encurta o
+// histórico e tenta DE NOVO — uma vez só.
+//
+// A divisão de responsabilidade é deliberada: o adaptador reconhece a evidência
+// (o código HTTP do fornecedor) e traduz para o sentinela do porto; aqui se
+// decide o que fazer, porque o que pode ser descartado de uma conversa é regra
+// de produto — a instrução de sistema fica, resultado de ferramenta não pode
+// ficar órfão da chamada que o gerou.
+//
+// Uma tentativa, e não um laço: se comprimir metade do histórico não bastou, o
+// problema não é o tamanho — é uma única mensagem gigante, e comprimir de novo
+// só descartaria o pedido original. Melhor falhar dizendo isso.
+//
+// Note que NÃO existe compressão preventiva. Com cache de prompt, encurtar o
+// histórico reescreve o prefixo cacheado e faz pagar preço cheio justamente
+// pelos tokens que a compressão tentaria economizar. Comprimir só quando o
+// modelo recusa é o que mantém o cache útil.
+func (a *Agent) complete(ctx context.Context, conv *domain.Conversation, specs []ports.ToolSpec) (*ports.Completion, error) {
+	completion, err := a.model.Complete(ctx, conv.Messages, specs)
+	if !errors.Is(err, ports.ErrContextTooLong) {
+		return completion, err
+	}
+	if !conv.Compact() {
+		return nil, fmt.Errorf("%w e não há histórico para descartar: %v", ports.ErrContextTooLong, err)
+	}
+	return a.model.Complete(ctx, conv.Messages, specs)
 }
 
 // settle encerra um turno gravando o DURÁVEL primeiro: conversa, depois tarefa,

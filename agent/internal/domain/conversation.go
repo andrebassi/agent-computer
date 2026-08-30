@@ -120,14 +120,69 @@ func (c *Conversation) Trim(maxMessages int) {
 	system := c.Messages[0]
 	// Quantas mensagens, além da de sistema, cabem.
 	keep := maxMessages - 1
-	start := len(c.Messages) - keep
-	for start < len(c.Messages) && c.Messages[start].Role == RoleTool {
-		start++
-	}
+	start := skipOrphanToolResults(c.Messages, len(c.Messages)-keep)
 	trimmed := make([]Message, 0, keep+1)
 	trimmed = append(trimmed, system)
 	trimmed = append(trimmed, c.Messages[start:]...)
 	c.Messages = trimmed
+}
+
+// skipOrphanToolResults avança o índice até a primeira mensagem que não seja
+// resultado de ferramenta.
+//
+// A API recusa um turno RoleTool cujo assistant correspondente saiu do
+// histórico. Como Trim e Compact cortam pelo mesmo motivo — o histórico não cabe
+// —, a regra fica num lugar só: duas cópias divergiriam, e a que divergisse
+// produziria uma requisição recusada num caminho que ninguém exercita todo dia.
+func skipOrphanToolResults(messages []Message, from int) int {
+	if from < 0 {
+		from = 0
+	}
+	for from < len(messages) && messages[from].Role == RoleTool {
+		from++
+	}
+	return from
+}
+
+// Compact descarta a metade mais antiga do histórico, preservando a instrução de
+// sistema.
+//
+// É diferente do Trim, e a diferença é o gatilho: o Trim é preventivo e conta
+// MENSAGENS; este é reação a uma recusa do modelo e precisa tirar VOLUME mesmo
+// com a contagem dentro do limite — uma única saída de comando pode ocupar a
+// janela inteira sozinha.
+//
+// Devolve false quando não há o que cortar. Sem esse retorno, quem chamou
+// refaria a chamada com o mesmo histórico, receberia o mesmo erro, e o par
+// "comprime e tenta de novo" viraria laço.
+//
+// O marcador entra como mensagem de usuário, e NÃO anexado à instrução de
+// sistema: anexar faria a instrução crescer a cada compressão e adulteraria
+// justamente as regras de conduta que o Trim existe para proteger.
+func (c *Conversation) Compact() bool {
+	// Menos de quatro mensagens: sistema, o pedido original e pouco mais. Cortar
+	// aqui removeria o próprio pedido, e o agente perderia o que estava fazendo.
+	if len(c.Messages) < 4 {
+		return false
+	}
+	system := c.Messages[0]
+	start := skipOrphanToolResults(c.Messages, 1+(len(c.Messages)-1)/2)
+	// A varredura pode ter consumido tudo que sobrava.
+	if start >= len(c.Messages) {
+		return false
+	}
+	removed := start - 1
+
+	compacted := make([]Message, 0, len(c.Messages)-removed+1)
+	compacted = append(compacted, system)
+	compacted = append(compacted, Message{
+		Role: RoleUser,
+		Content: fmt.Sprintf(
+			"[histórico comprimido: %d mensagens antigas foram removidas por limite de contexto]", removed),
+	})
+	compacted = append(compacted, c.Messages[start:]...)
+	c.Messages = compacted
+	return true
 }
 
 // Summary devolve uma linha por mensagem, para diagnóstico. Usa o conteúdo já

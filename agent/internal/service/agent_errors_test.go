@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -284,5 +285,112 @@ func TestRunReusesExistingConversation(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("a conversa anterior devia ser reaproveitada")
+	}
+}
+
+// countingModel falha uma vez com o erro dado e registra quantas mensagens
+// recebeu em cada chamada.
+//
+// Contar as mensagens é o ponto: é a única forma de provar que a segunda chamada
+// foi feita com um histórico MENOR. Um teste que só verificasse "não deu erro"
+// passaria mesmo sem compressão nenhuma.
+type countingModel struct {
+	failFirstWith error
+	sizes         []int
+	calls         int
+}
+
+// Complete registra o tamanho do histórico e falha só na primeira chamada.
+func (m *countingModel) Complete(_ context.Context, messages []domain.Message, _ []ports.ToolSpec) (*ports.Completion, error) {
+	m.sizes = append(m.sizes, len(messages))
+	m.calls++
+	if m.calls == 1 && m.failFirstWith != nil {
+		return nil, m.failFirstWith
+	}
+	return &ports.Completion{Content: "pronto", StopReason: "stop"}, nil
+}
+
+// longConversation monta um histórico grande o bastante para ser comprimido.
+func longConversation(t *testing.T, taskID string) *domain.Conversation {
+	t.Helper()
+	conv := domain.NewConversation(taskID, "instruções")
+	for i := 0; i < 12; i++ {
+		conv.AddUser(fmt.Sprintf("pedido %d", i))
+	}
+	return conv
+}
+
+// Janela estourada faz o agente ENCURTAR o histórico e tentar de novo.
+//
+// Sem isto, uma conversa que cresceu demais mata a tarefa de forma definitiva —
+// e ela está segurando a trava da tela.
+func TestModelRetriesAfterCompactingHistory(t *testing.T) {
+	model := &countingModel{failFirstWith: fmt.Errorf("%w: 256000 tokens", ports.ErrContextTooLong)}
+	store, lock, screen := newFakeStore(), &fakeLock{}, &fakeScreen{}
+	store.conversations["t1"] = longConversation(t, "t1")
+	agent := newAgent(model, nil, screen, store, lock)
+
+	task, err := domain.NewTask("t1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("devia ter se recuperado comprimindo: %v", err)
+	}
+	if model.calls != 2 {
+		t.Fatalf("esperava 2 chamadas (falha + retomada), veio %d", model.calls)
+	}
+	if model.sizes[1] >= model.sizes[0] {
+		t.Fatalf("a segunda chamada devia ter MENOS mensagens: %d -> %d", model.sizes[0], model.sizes[1])
+	}
+	if task.State != domain.StateDone {
+		t.Fatalf("a tarefa devia concluir, veio %s", task.State)
+	}
+}
+
+// Janela estourada com histórico mínimo falha dizendo isso.
+//
+// Comprimir de novo só descartaria o pedido original: se metade do histórico não
+// bastou, o problema é uma mensagem gigante, não o tamanho total.
+func TestContextOverflowWithNothingToCompactFails(t *testing.T) {
+	model := &countingModel{failFirstWith: fmt.Errorf("%w", ports.ErrContextTooLong)}
+	store, lock, screen := newFakeStore(), &fakeLock{}, &fakeScreen{}
+	agent := newAgent(model, nil, screen, store, lock)
+
+	task, err := domain.NewTask("t1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	err = agent.Run(context.Background(), task)
+	if !errors.Is(err, ports.ErrContextTooLong) {
+		t.Fatalf("esperava ErrContextTooLong, veio %v", err)
+	}
+	if model.calls != 1 {
+		t.Fatalf("não devia tentar de novo sem ter comprimido: %d chamadas", model.calls)
+	}
+	if task.State != domain.StateFailed {
+		t.Fatalf("a tarefa devia falhar, veio %s", task.State)
+	}
+}
+
+// Erro que NÃO é janela estourada não dispara compressão.
+//
+// Comprimir por causa de uma queda de rede jogaria fora trabalho sem resolver
+// nada — e o histórico perdido não volta.
+func TestOtherErrorsDoNotCompact(t *testing.T) {
+	model := &countingModel{failFirstWith: ports.ErrModelUnavailable}
+	store, lock, screen := newFakeStore(), &fakeLock{}, &fakeScreen{}
+	store.conversations["t1"] = longConversation(t, "t1")
+	agent := newAgent(model, nil, screen, store, lock)
+
+	task, err := domain.NewTask("t1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if err := agent.Run(context.Background(), task); !errors.Is(err, ports.ErrModelUnavailable) {
+		t.Fatalf("esperava ErrModelUnavailable, veio %v", err)
+	}
+	if model.calls != 1 {
+		t.Fatalf("indisponibilidade não devia disparar retomada: %d chamadas", model.calls)
 	}
 }
