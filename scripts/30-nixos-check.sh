@@ -1,0 +1,131 @@
+#!/bin/bash
+# Avalia a configuracao NixOS INTEIRA no Mac, antes de gastar um droplet.
+#
+# # Por que existe
+#
+# O dono decidiu reconstruir direto, sem droplet paralelo de validacao. Isso
+# torna cara toda falha que so aparece no boot -- e a maioria delas e barata de
+# pegar aqui: opcao inexistente, tipo errado, atributo duplicado, pacote com
+# nome errado, asserção do proprio NixOS.
+#
+# Ja pegou duas nesta sessao, e as duas teriam custado uma reconstrucao:
+#
+#   1. `websockify` NAO existe no topo do nixpkgs (e `python3Packages.websockify`).
+#      Uma tela sem noVNC, descoberta so ao abrir o navegador.
+#   2. Com `users.mutableUsers = false` e sem chave de root declarada, o NixOS
+#      afirma: "Neither the root account nor any wheel user has a password or
+#      SSH authorized key. You must set one to prevent being locked out."
+#      Seria um droplet inalcancavel.
+#
+# # O que ele NAO faz
+#
+# Nao constroi nada. Avalia ate o `drvPath` do sistema, o que forca o modulo
+# inteiro a ser resolvido sem baixar uma derivacao sequer. Build de verdade
+# acontece na maquina, no primeiro boot.
+#
+# Nao substitui as tres suites: elas verificam COMPORTAMENTO na maquina, e isto
+# verifica que a configuracao e valida. Sao coisas diferentes.
+set -uo pipefail
+
+repoRoot="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repoRoot"
+
+nixpkgsChannel="nixos-25.11"
+errs=0
+fail() { echo "  🛑 $1"; errs=$((errs+1)); }
+ok()   { echo "  ✅ $1"; }
+
+echo "1/4 os arquivos que o modulo exige existem"
+for f in nixos/host.nix nixos/agent-authorized-keys \
+         nixos/scripts/screen-add.sh nixos/scripts/screen-remove.sh \
+         nixos/scripts/session-sync.sh nixos/scripts/agent-status.sh; do
+  [ -s "$f" ] && ok "$f" || fail "$f ausente ou vazio"
+done
+# A chave publica e lida em tempo de avaliacao; sem ela o modulo nem carrega, e
+# o erro aponta para o Nix em vez de apontar para o arquivo que falta.
+if [ -s nixos/agent-authorized-keys ] && ! grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-)' nixos/agent-authorized-keys; then
+  fail "nixos/agent-authorized-keys nao parece uma chave publica"
+fi
+
+# ASCII ESTRITO, e nao apenas "sem caractere de controle".
+#
+# Tudo isto viaja no user-data, e o DigitalOcean corrompe user-data com QUALQUER
+# byte nao-ASCII: ele duplo-codifica UTF-8, o C2 80 resultante e um caractere de
+# controle C1, e o cloud-init RECUSA o arquivo inteiro em silencio -- reporta
+# "status: done", nao instala nada, e o droplet sobe vazio.
+#
+# Ja custou tres droplets. Um `assercao` com cedilha num comentario bastaria.
+echo
+echo "1b/4 ASCII estrito (o user-data nao tolera um byte acima de 127)"
+for f in nixos/host.nix nixos/scripts/*.sh nixos/agent-authorized-keys; do
+  if python3 -c "
+import sys
+data = open('$f','rb').read()
+try:
+    data.decode('ascii')
+except UnicodeDecodeError as e:
+    ctx = data[max(0,e.start-45):e.start+10].decode('utf-8','replace')
+    print('byte %s em %d, perto de %r' % (hex(data[e.start]), e.start, ctx[-40:]))
+    sys.exit(1)
+" 2>/dev/null; then
+    ok "$(basename "$f")"
+  else
+    fail "$(basename "$f"): $(python3 -c "
+data = open('$f','rb').read()
+try:
+    data.decode('ascii')
+except UnicodeDecodeError as e:
+    ctx = data[max(0,e.start-45):e.start+10].decode('utf-8','replace')
+    print('byte %s perto de %r' % (hex(data[e.start]), ctx[-40:]))
+")"
+  fi
+done
+
+echo
+echo "2/4 sintaxe dos auxiliares em shell"
+for f in nixos/scripts/*.sh; do
+  bash -n "$f" 2>/dev/null && ok "$(basename "$f")" || fail "$(basename "$f"): erro de sintaxe"
+done
+
+echo
+echo "3/4 sintaxe do modulo Nix"
+if timeout 120s nix-instantiate --parse nixos/host.nix >/dev/null 2>/tmp/nixos-check-parse.log; then
+  ok "host.nix analisa"
+else
+  fail "host.nix nao analisa:"
+  sed 's/^/      /' /tmp/nixos-check-parse.log | head -12
+fi
+
+echo
+echo "4/4 avaliacao do sistema completo (x86_64-linux)"
+# Os dois stubs substituem o que o nixos-infect gera na maquina de verdade:
+# gerenciador de boot e sistema de arquivos raiz. Sem eles a avaliacao reclama
+# de opcao obrigatoria que ali vem do hardware-configuration.nix.
+evalOut="$(timeout 900s nix --extra-experimental-features 'nix-command flakes' \
+  eval --impure --raw --expr "
+let
+  nixpkgs = builtins.fetchTarball \"https://github.com/NixOS/nixpkgs/archive/${nixpkgsChannel}.tar.gz\";
+  system = import \"\${nixpkgs}/nixos/lib/eval-config.nix\" {
+    system = \"x86_64-linux\";
+    modules = [ ./nixos/host.nix ({ ... }: {
+      boot.loader.grub.device = \"/dev/vda\";
+      fileSystems.\"/\" = { device = \"/dev/vda1\"; fsType = \"ext4\"; };
+    }) ];
+  };
+in \"drvPath: \${system.config.system.build.toplevel.drvPath}\"
+" 2>&1)"
+if echo "$evalOut" | grep -q '^drvPath: /nix/store/'; then
+  ok "$(echo "$evalOut" | grep '^drvPath:')"
+  # Aviso do NixOS nao reprova, mas precisa aparecer: o que ele costuma
+  # denunciar e ordenacao de unidade sem dependencia, que falha em silencio.
+  if echo "$evalOut" | grep -q 'evaluation warning'; then
+    echo "$evalOut" | grep 'evaluation warning' | sed 's/^/  ⚠️  /'
+  fi
+else
+  fail "a avaliacao falhou:"
+  echo "$evalOut" | tail -20 | sed 's/^/      /'
+fi
+
+echo
+echo "erros: $errs"
+exit $errs

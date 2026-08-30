@@ -14,6 +14,14 @@ run: once
 
 # Agent computer — desktop virtual persistente no DigitalOcean.
 # Todo comando registra saída em logs/, conforme a regra de logging do workspace.
+#
+# DOIS caminhos de sistema, escolhidos por AGENT_OS:
+#
+#   task up                    Ubuntu + cloud-init  (padrão, e o já verificado)
+#   AGENT_OS=nixos task up     NixOS declarativo    (nixos/host.nix, via nixos-infect)
+#
+# O padrão continua Ubuntu de propósito: mantê-lo intacto é o que torna o NixOS
+# uma escolha em vez de uma aposta. Voltar custa uma variável.
 
 vars:
   LOG: '{{.TASK}}.log'
@@ -100,6 +108,17 @@ tasks:
       - mkdir -p logs
       - ./scripts/26-setup-vault.sh 2>&1 | tee logs/vault.log
       - ./scripts/23-setup-api-token.sh 2>&1 | tee logs/api-token.log
+
+  nixos-check:
+    desc: 'Avalia a config NixOS no Mac, antes de gastar droplet — sintaxe, ASCII e sistema completo'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/30-nixos-check.sh 2>&1 | tee logs/nixos-check.log
+
+  nixos-userdata:
+    desc: 'Mostra o cloud-init do caminho NixOS, gerado a partir de nixos/'
+    cmds:
+      - ./scripts/29-render-nixos-userdata.sh
 
   privilege-test:
     desc: 'Prova adversarial: o modelo não alcança o cofre, não vira root, não troca o binário'

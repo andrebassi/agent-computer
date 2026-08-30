@@ -13,6 +13,42 @@ DROPLET_IMAGE="${DROPLET_IMAGE:-ubuntu-24-04-x64}"
 SSH_KEY_ID="${SSH_KEY_ID:-55207659}"            # andrebassi-bb, única chave da conta
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/andrebassi-bb}"
 
+# Qual sistema o droplet recebe. São DOIS caminhos, e os dois valem.
+#
+#   ubuntu  cloud-init imperativo, 658 linhas — o padrão, e é o verificado
+#   nixos   configuração declarativa em nixos/host.nix, via nixos-infect
+#
+# O padrão continua sendo `ubuntu` de propósito: ele é o caminho que já passou
+# pelas três suítes, e mantê-lo intacto é o que torna o NixOS uma escolha em vez
+# de uma aposta. Se o NixOS não subir, voltar custa uma variável:
+#
+#   task destroy && AGENT_OS=ubuntu task up
+#
+# ⚠️ A imagem do droplet continua sendo Ubuntu mesmo com `AGENT_OS=nixos`: o
+# nixos-infect converte a máquina em NixOS DEPOIS do primeiro boot. Não trocar
+# DROPLET_IMAGE achando que ajuda — não existe imagem NixOS oficial no DO.
+AGENT_OS="${AGENT_OS:-ubuntu}"
+case "$AGENT_OS" in
+  ubuntu|nixos) ;;
+  *) echo "🛑 AGENT_OS inválido: '$AGENT_OS' (use 'ubuntu' ou 'nixos')" >&2; return 1 2>/dev/null || exit 1 ;;
+esac
+
+# agent_os descobre qual sistema a máquina NO AR está rodando.
+#
+# Não confunde com $AGENT_OS: aquele é o que se quer criar, este é o que existe.
+# Os dois divergem o tempo todo — ao trocar de caminho, ao rodar um teste contra
+# uma máquina criada ontem. Verificação que lê a variável em vez de perguntar à
+# máquina reporta o firewall errado e acusa defeito onde não há.
+agent_os() {
+  local osID
+  osID="$(agent_ssh '. /etc/os-release 2>/dev/null && echo "$ID"' 2>/dev/null | tr -d '\r')"
+  case "$osID" in
+    nixos)  echo "nixos" ;;
+    ubuntu) echo "ubuntu" ;;
+    *)      echo "desconhecido" ;;
+  esac
+}
+
 # Estado duravel: volume de bloco separado do disco do droplet. E o que permite
 # o "Update" da doc -- trocar a imagem do computador sem perder o trabalho.
 # US$ 0,10/GB/mes.

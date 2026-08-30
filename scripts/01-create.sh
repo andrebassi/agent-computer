@@ -19,7 +19,23 @@ if [ -n "$(droplet_id)" ]; then
   exit 0
 fi
 
-USER_DATA="${PROJECT_DIR}/cloud-init/user-data.yaml"
+# Dois caminhos, e o gate abaixo vale para os dois.
+#
+# O do NixOS é GERADO na hora a partir de `nixos/`, e não versionado: manter uma
+# cópia do módulo dentro de um YAML seria manter duas verdades, e a que fica para
+# trás sobe sem erro nenhum — as duas são YAML válido.
+case "$AGENT_OS" in
+  ubuntu)
+    USER_DATA="${PROJECT_DIR}/cloud-init/user-data.yaml"
+    ;;
+  nixos)
+    echo "montando o cloud-init do NixOS a partir de nixos/"
+    USER_DATA="$(mktemp "${TMPDIR:-/tmp}/agent-computer-nixos.XXXXXX.yaml")"
+    trap 'rm -f "$USER_DATA"' EXIT
+    "${PROJECT_DIR}/scripts/29-render-nixos-userdata.sh" > "$USER_DATA"
+    ;;
+esac
+echo "sistema: $AGENT_OS"
 
 # Gate: YAML invalido so apareceria depois de o droplet existir e cobrar.
 echo "validando cloud-init antes de enviar"

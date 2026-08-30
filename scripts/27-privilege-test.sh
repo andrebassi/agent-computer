@@ -74,7 +74,19 @@ fi
 echo
 echo "=== 5. o modelo NAO vira root por sudo aberto ==="
 # O NOPASSWD:ALL antigo tornava tudo o resto decorativo.
-for attempt in 'sudo -n cat /etc/agentd/vault.pass' 'sudo -n -u agentd cat /etc/agentd/vault.pass' 'sudo -n bash -c id' 'sudo -n su - root -c id' 'sudo -n chown agent /etc/agentd/vault.pass' 'sudo -n apt-get install -y cowsay'; do
+#
+# A escalada pelo gerenciador de pacotes muda de nome conforme o sistema, e
+# testar o errado passa por engano: `apt-get` nao existe em NixOS, entao a
+# tentativa falharia por "comando nao encontrado" e o teste leria isso como
+# "recusado" -- aprovando sem ter exercitado nada.
+osName="$(agent_os)"
+echo "  sistema: $osName"
+case "$osName" in
+  nixos)  packageEscalation=('sudo -n nix-env -iA nixpkgs.cowsay' 'sudo -n nixos-rebuild switch') ;;
+  ubuntu) packageEscalation=('sudo -n apt-get install -y cowsay') ;;
+  *)      packageEscalation=() ; fail "sistema desconhecido: nao sei qual gerenciador de pacotes testar" ;;
+esac
+for attempt in 'sudo -n cat /etc/agentd/vault.pass' 'sudo -n -u agentd cat /etc/agentd/vault.pass' 'sudo -n bash -c id' 'sudo -n su - root -c id' 'sudo -n chown agent /etc/agentd/vault.pass' "${packageEscalation[@]}"; do
   if tryAsModel "$attempt"; then
     fail "PASSOU: $attempt"
   else
@@ -153,7 +165,12 @@ sudoRefused() {
   output="$(agent_ssh "$1" 2>&1)"
   echo "$output" | grep -qiE 'not allowed to execute|a (terminal|password) is required|Sorry, user'
 }
-for allowed in 'sudo -n systemctl is-active agentd-api' 'sudo -n systemctl daemon-reload' 'sudo -n ufw status' 'sudo -n mount -a'; do
+# `ufw` so existe no Ubuntu; em NixOS a leitura equivalente e o `nft`.
+case "$osName" in
+  nixos)  firewallRead='sudo -n nft list ruleset' ;;
+  *)      firewallRead='sudo -n ufw status' ;;
+esac
+for allowed in 'sudo -n systemctl is-active agentd-api' 'sudo -n systemctl daemon-reload' "$firewallRead" 'sudo -n mount -a'; do
   if sudoRefused "$allowed"; then
     fail "a operacao QUEBROU: $allowed"
   else

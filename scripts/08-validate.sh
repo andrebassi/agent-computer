@@ -85,11 +85,40 @@ done
 
 echo
 echo "=== 4. firewall ==="
-ufw="$(agent_ssh 'sudo ufw status 2>/dev/null')"
-echo "$ufw" | grep -q "Status: active" && ok "ufw ativo" || fail "ufw inativo"
-for p in 5901 6081 9221; do
-  echo "$ufw" | grep -q "^$p" && fail "ufw permite $p de fora" || ok "ufw nao expoe $p"
-done
+# Ramifica pelo sistema DA MAQUINA, nao pela variavel AGENT_OS.
+#
+# As duas divergem o tempo todo: AGENT_OS diz o que se quer criar, a maquina no
+# ar pode ser de ontem, de outro caminho. Um teste que le a variavel conferiria
+# ufw num NixOS, nao encontraria, e acusaria "firewall inativo" numa maquina
+# perfeitamente fechada -- falso alarme que manda consertar o que esta certo.
+osName="$(agent_os)"
+echo "  sistema: $osName"
+case "$osName" in
+  nixos)
+    # NixOS usa nftables por networking.firewall. A tabela se chama `nixos-fw`.
+    rules="$(agent_ssh 'sudo -n nft list ruleset 2>/dev/null')"
+    echo "$rules" | grep -q 'nixos-fw' && ok "firewall do NixOS ativo" || fail "nftables sem a tabela nixos-fw"
+    # A prova que importa e a mesma nos dois sistemas: as portas de tela e a de
+    # tarefas NAO podem estar liberadas de fora.
+    for p in 5901 6081 9221 8787; do
+      if echo "$rules" | grep -qE "dport ($p|\{[^}]*\b$p\b)"; then
+        fail "firewall permite $p de fora"
+      else
+        ok "firewall nao expoe $p"
+      fi
+    done
+    ;;
+  ubuntu)
+    ufw="$(agent_ssh 'sudo ufw status 2>/dev/null')"
+    echo "$ufw" | grep -q "Status: active" && ok "ufw ativo" || fail "ufw inativo"
+    for p in 5901 6081 9221; do
+      echo "$ufw" | grep -q "^$p" && fail "ufw permite $p de fora" || ok "ufw nao expoe $p"
+    done
+    ;;
+  *)
+    fail "sistema desconhecido: nao sei conferir o firewall"
+    ;;
+esac
 
 echo
 echo "=== 5. tela X responde ==="

@@ -463,7 +463,16 @@ write_files:
       mkdir -p "$DST"
       cp -a --reflink=auto "$SRC/." "$DST/" 2>/dev/null || cp -a "$SRC/." "$DST/"
       rm -f "$DST"/Singleton* "$DST"/*.lock 2>/dev/null || true
-      sudo chown -R agent:agent "$DST"
+      # `chown` SEM sudo, de proposito.
+      #
+      # Ele estava com `sudo`, herdado de quando o script rodava como root -- e desde
+      # que a lista de sudo virou fechada (chown ficou de fora: e root por outro
+      # caminho, bastaria apontar para o arquivo de senha do cofre) esta linha
+      # ABORTAVA o script inteiro, com `set -e`, no meio de uma copia de perfil.
+      #
+      # Nao precisa de privilegio nenhum: o script roda como `agent` e o destino ja e
+      # `agent:agent`. Medido em 30/08/2026.
+      chown -R agent:agent "$DST"
 
       echo "religando o navegador da tela $TO"
       sudo systemctl start "chrome@$TO"

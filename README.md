@@ -47,6 +47,63 @@ agentd -prompt "@digitalocean audite a conta e escreva o relatório"
 task snapshot && task destroy              # guarda e derruba: US$ 26 → US$ 2/mês
 ```
 
+## Dois sistemas, e os dois valem
+
+A máquina pode nascer de dois jeitos. **Nenhum substitui o outro.**
+
+```bash
+task up                    # Ubuntu + cloud-init  (padrão)
+AGENT_OS=nixos task up     # NixOS declarativo
+```
+
+| | Ubuntu | NixOS |
+|---|---|---|
+| como é descrito | `cloud-init/user-data.yaml`, 658 linhas | `nixos/host.nix` |
+| como chega | cloud-init imperativo | `nixos-infect` com `NIXOS_IMPORT` |
+| estado | 29 passos de `runcmd` em ordem | declaração |
+| erro de sudoers | descarta o arquivo inteiro **em silêncio** | **não compila** |
+| verificação antes de gastar droplet | YAML + ASCII | `task nixos-check` avalia o sistema **inteiro** |
+
+O Ubuntu continua sendo o padrão **de propósito**: é o caminho que passou pelas
+três suítes, e mantê-lo intacto é o que torna o NixOS uma escolha em vez de uma
+aposta. Voltar custa uma variável, não um `git revert`.
+
+### Por que o NixOS existe aqui
+
+Três defeitos desta sessão foram da mesma classe — estado imperativo divergindo
+da intenção **sem avisar**:
+
+| Sintoma | Causa |
+|---|---|
+| `agent` sem sudo nenhum | erro de sintaxe no sudoers descartou o drop-in inteiro |
+| toda tela em 409 permanente | `locks/` ficou com o dono antigo; o supervisor lê falha de trava como "tela ocupada" |
+| proatividade quebrada em silêncio | `agentd-notify` ficou como `User=agent` depois da separação de usuários |
+
+No caminho declarativo os três deixam de ser possíveis, e isso é **medido**, não
+afirmado: `task nixos-check` com um `commands = "ALL"` malformado reprova com
+
+```
+error: A definition for option `security.sudo.extraRules."[...]".commands'
+is not of type `list of (string or (submodule))'
+```
+
+— no Mac, antes de existir droplet.
+
+### O que o `nixos-check` já pegou
+
+Duas coisas que teriam custado uma reconstrução cada:
+
+1. **`websockify` não existe no topo do nixpkgs** (é `python3Packages.websockify`).
+   Seria uma tela sem noVNC, descoberta só ao abrir o navegador.
+2. Com `users.mutableUsers = false` e sem chave de root declarada, o NixOS
+   afirma: *"Neither the root account nor any wheel user has a password or SSH
+   authorized key."* Seria um droplet **inalcançável**.
+
+> 🛑 **`NIXOS_IMPORT`, nunca `NIXOS_CONFIG`.** O guard
+> `[[ -e /etc/nixos/configuration.nix ]] && return 0` do `nixos-infect` aborta a
+> função inteira — pulando também `hardware-configuration.nix` e a configuração
+> de **rede**. Pré-escrever a config faria a máquina subir sem rota.
+
 ## Arquitetura
 
 O ponto que decide tudo: **o droplet é descartável, o volume é o computador.**
