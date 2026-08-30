@@ -129,7 +129,10 @@ func TestDelegateRunsAgentWithTaskAndCredential(t *testing.T) {
 	}
 
 	fakeAgent := filepath.Join(dir, "fake-agent")
-	script := "#!/bin/sh\necho \"modo:$1\"\necho \"tarefa:$2\"\necho \"credencial:$ANTHROPIC_API_KEY\"\n"
+	// Ecoa TODOS os argumentos, e não `$1`/`$2`: checar por posição amarra o
+	// teste à ordem das flags, e ele quebrou quando `--allowedTools` entrou —
+	// falha de teste, não de código.
+	script := "#!/bin/sh\necho \"argumentos:$*\"\necho \"credencial:$ANTHROPIC_API_KEY\"\n"
 	if err := os.WriteFile(fakeAgent, []byte(script), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
@@ -143,14 +146,91 @@ func TestDelegateRunsAgentWithTaskAndCredential(t *testing.T) {
 	if result.Failed {
 		t.Fatalf("não devia falhar: %q", result.Output)
 	}
-	if !strings.Contains(result.Output, "modo:-p") {
+	if !strings.Contains(result.Output, "-p") {
 		t.Fatalf("devia rodar sem interação: %q", result.Output)
 	}
-	if !strings.Contains(result.Output, "tarefa:conserte o teste de login") {
+	if !strings.Contains(result.Output, "conserte o teste de login") {
 		t.Fatalf("a tarefa devia chegar como argumento: %q", result.Output)
 	}
 	if !strings.Contains(result.Output, "credencial:chave-de-teste") {
 		t.Fatalf("a credencial devia chegar pelo ambiente: %q", result.Output)
+	}
+}
+
+// A busca web tem de ir liberada, senão o agente de código PEDE APROVAÇÃO.
+//
+// Medido em 30/08 e é o pior modo de falha da ferramenta: sem `--allowedTools`
+// ele devolveu "preciso que você aprove a permissão de WebSearch" como texto,
+// com código de saída zero. Quem delegou leu aquilo como resposta, concluiu que
+// não dava para buscar, e gastou 20 chamadas raspando HTML.
+func TestDelegatePassesAllowedTools(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "cred.env")
+	if err := os.WriteFile(envFile, []byte("ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	// Ecoa os próprios argumentos, que é o que precisa ser conferido.
+	echoArgs := filepath.Join(dir, "arg-reporter")
+	if err := os.WriteFile(echoArgs, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+
+	d := NewDelegate(dir, envFile)
+	d.binary = echoArgs
+	result, err := d.Execute(context.Background(), 1, `{"task":"quem joga hoje"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	for _, tool := range []string{"WebSearch", "WebFetch"} {
+		if !strings.Contains(result.Output, tool) {
+			t.Fatalf("%s devia ir liberada, senão a delegação pede aprovação: %q", tool, result.Output)
+		}
+	}
+	// A tarefa continua sendo o último argumento, depois das flags.
+	if !strings.HasSuffix(strings.TrimSpace(result.Output), "quem joga hoje") {
+		t.Fatalf("a tarefa devia ser o último argumento: %q", result.Output)
+	}
+	// Procuração ampla NÃO: o computador carrega credencial de conta.
+	if strings.Contains(result.Output, "bypassPermissions") {
+		t.Fatalf("não pode liberar tudo, só a lista: %q", result.Output)
+	}
+}
+
+// O arquivo de credencial VENCE o que estiver no ambiente deste processo.
+//
+// Sem essa precedência, uma `ANTHROPIC_API_KEY` velha herdada do shell venceria
+// o token de assinatura, e a delegação falharia com "Credit balance is too low"
+// — mensagem que manda olhar a conta de API quando o problema é a ordem das
+// variáveis. Aconteceu de verdade em 30/08.
+func TestDelegateEnvFileOverridesInheritedVariables(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "cred.env")
+	if err := os.WriteFile(envFile, []byte("ANTHROPIC_API_KEY=a-do-arquivo\n"), 0o600); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "a-herdada-do-shell")
+
+	reporter := filepath.Join(dir, "env-reporter")
+	script := "#!/bin/sh\necho \"chave:$ANTHROPIC_API_KEY\"\necho \"config:$CLAUDE_CONFIG_DIR\"\n"
+	if err := os.WriteFile(reporter, []byte(script), 0o755); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+
+	d := NewDelegate(dir, envFile)
+	d.binary = reporter
+	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	if !strings.Contains(result.Output, "chave:a-do-arquivo") {
+		t.Fatalf("o arquivo devia vencer o ambiente herdado: %q", result.Output)
+	}
+
+	// A configuração precisa cair no volume durável, ao lado da credencial, e
+	// não no `~/.claude` padrão, que morre no rebuild.
+	esperado := filepath.Join(dir, "claude-config")
+	if !strings.Contains(result.Output, "config:"+esperado) {
+		t.Fatalf("o config devia apontar para %q: %q", esperado, result.Output)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +26,21 @@ const delegateTimeout = 15 * time.Minute
 // narração inteira.
 const maxDelegateOutput = 6000
 
+// allowedDelegateTools é o que o agente de código pode usar sem perguntar.
+//
+// Sem esta lista ele PARA e pede aprovação — e devolve o pedido como texto
+// normal, com código de saída zero, que quem delegou lê como se fosse a
+// resposta. É pior que um erro, porque não parece falha nenhuma.
+//
+// A lista é deliberadamente curta: pesquisar, ler e editar arquivo, rodar
+// comando. Não entra nada que fale com serviço externo em nome da conta — este
+// computador guarda credencial de conta, e delegar não é procuração.
+var allowedDelegateTools = []string{
+	"WebSearch", "WebFetch", // a razão de a busca funcionar de um IP bloqueado
+	"Read", "Write", "Edit", "Glob", "Grep",
+	"Bash",
+}
+
 // Delegate entrega uma tarefa de código ao Claude Code.
 //
 // Existe porque os dois agentes têm forças diferentes e não se substituem: este
@@ -40,7 +56,17 @@ type Delegate struct {
 	// envFile guarda a credencial dele. Fica em arquivo, e não no ambiente deste
 	// processo, para a chave não vazar por `ps` nem por dump de memória de um
 	// processo de vida longa.
+	//
+	// Aceita os dois modos de autenticação sem distinguir: `ANTHROPIC_API_KEY`
+	// para conta de API, ou `CLAUDE_CODE_OAUTH_TOKEN` para assinatura. Quem
+	// escreve o arquivo escolhe — a ferramenta só repassa ao ambiente do filho.
 	envFile string
+	// configDir é onde o agente de código guarda sessão e configuração.
+	//
+	// Precisa apontar para o volume durável. O padrão dele é `~/.claude`, que
+	// mora no disco do SISTEMA: um `update` destruiria a sessão junto com o
+	// droplet, e a autenticação teria de ser refeita a cada rebuild.
+	configDir string
 	// binary permite ao teste apontar para um executável falso.
 	binary string
 }
@@ -51,8 +77,17 @@ type delegateArgs struct {
 }
 
 // NewDelegate cria a ferramenta de delegação.
+//
+// O diretório de configuração é derivado do arquivo de credencial, que já mora
+// no volume durável — assim os dois ficam juntos e não há um terceiro caminho
+// para alguém configurar errado.
 func NewDelegate(workdir, envFile string) *Delegate {
-	return &Delegate{workdir: workdir, envFile: envFile, binary: "claude"}
+	return &Delegate{
+		workdir:   workdir,
+		envFile:   envFile,
+		configDir: filepath.Join(filepath.Dir(envFile), "claude-config"),
+		binary:    "claude",
+	}
 }
 
 // Spec descreve a ferramenta para o modelo.
@@ -106,9 +141,26 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	// -p roda sem interação e devolve só o resultado: um agente não tem como
 	// responder a pergunta interativa, e sem isso a chamada penduraria até o
 	// tempo limite.
-	cmd := exec.CommandContext(runCtx, d.binary, "-p", args.Task)
+	//
+	// --allowedTools é o que impede o modo de falha mais traiçoeiro desta
+	// ferramenta. Medido em 30/08: sem ele, o agente de código devolveu "preciso
+	// que você aprove a permissão de WebSearch" — texto, não erro, com código de
+	// saída zero. Quem delegou leu aquilo como resposta, concluiu que a busca era
+	// impossível, e gastou 20 chamadas raspando HTML à mão para chegar a nada.
+	//
+	// A lista é explícita, e não `--permission-mode bypassPermissions`, porque o
+	// que se quer liberar é PESQUISA e EDIÇÃO — não uma procuração para tudo num
+	// computador que carrega credencial de conta.
+	cmd := exec.CommandContext(runCtx, d.binary,
+		"--allowedTools", strings.Join(allowedDelegateTools, ","),
+		"-p", args.Task)
 	cmd.Dir = d.workdir
-	cmd.Env = append(os.Environ(), env...)
+	// A ordem importa: o que vem depois vence. O arquivo de credencial fica por
+	// último para poder sobrescrever qualquer variável herdada deste processo —
+	// uma `ANTHROPIC_API_KEY` velha no ambiente venceria o token de assinatura
+	// e a delegação falharia com erro de saldo, apontando para o lugar errado.
+	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+d.configDir)
+	cmd.Env = append(cmd.Env, env...)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf

@@ -11,6 +11,10 @@
 # 200, e e por isso que a terceira coluna existe.
 source "$(dirname "$0")/lib.sh"
 set -uo pipefail
+# Sem isto, `droplet_ip` nao consulta a API e TODA sonda reporta falha da fonte
+# quando o problema e local -- 16 linhas de "SEM o conteudo esperado" para um
+# droplet que estava de pe.
+load_token
 
 echo "sondando fontes da web a partir do droplet"
 echo "rota: $(agent_route)"
@@ -28,10 +32,28 @@ probe() {
   code="$(echo "$out" | grep -o 'HTTPCODE:[0-9]*' | cut -d: -f2)"
   bytes="$(echo "$out" | grep -o 'BYTES:[0-9]*' | cut -d: -f2)"
 
-  if echo "$out" | grep -qiE "$proof"; then
-    printf '  %-28s HTTP %-4s %8s B  ✅ conteudo presente\n' "$label" "${code:-?}" "${bytes:-0}"
+  # O veredicto exige as DUAS coisas: codigo bom E conteudo. Medido nesta
+  # sonda, cada uma sozinha mente numa direcao:
+  #
+  #  - o Google devolve 200 com 92 KB de pagina de bloqueio -- codigo sozinho
+  #    diria que funcionou;
+  #  - o Brave devolve 429 numa pagina cujo texto casa com "result" -- conteudo
+  #    sozinho diria que funcionou;
+  #  - o DuckDuckGo devolve 202, que e 2xx e parece sucesso, mas e o desafio
+  #    anti-bot dele.
+  #
+  # Por isso o unico codigo aceito e 200, e nao a faixa 2xx.
+  local temConteudo="nao"
+  echo "$out" | grep -qiE "$proof" && temConteudo="sim"
+
+  if [ "$code" = "200" ] && [ "$temConteudo" = "sim" ]; then
+    printf '  %-28s HTTP %-4s %8s B  ✅ serve\n' "$label" "${code:-?}" "${bytes:-0}"
+  elif [ "$code" = "200" ]; then
+    printf '  %-28s HTTP %-4s %8s B  🛑 200 SEM o conteudo (bloqueio disfarcado)\n' "$label" "${code:-?}" "${bytes:-0}"
+  elif [ "$temConteudo" = "sim" ]; then
+    printf '  %-28s HTTP %-4s %8s B  🛑 conteudo casa mas o CODIGO recusa\n' "$label" "${code:-?}" "${bytes:-0}"
   else
-    printf '  %-28s HTTP %-4s %8s B  🛑 SEM o conteudo esperado\n' "$label" "${code:-?}" "${bytes:-0}"
+    printf '  %-28s HTTP %-4s %8s B  🛑 nao serve\n' "$label" "${code:-?}" "${bytes:-0}"
   fi
 }
 

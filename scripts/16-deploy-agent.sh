@@ -11,6 +11,9 @@
 # cinco segundos.
 source "$(dirname "$0")/lib.sh"
 set -euo pipefail
+# Sem isto, `droplet_ip` nao consulta a API, `agent_ssh` devolve rc=1 e o `set
+# -e` aborta o script SEM MENSAGEM -- ele parece ter terminado na etapa 2.
+load_token
 
 repoRoot="$(cd "$(dirname "$0")/.." && pwd)"
 agentDir="$repoRoot/agent"

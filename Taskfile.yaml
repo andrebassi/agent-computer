@@ -100,6 +100,23 @@ tasks:
       - mkdir -p logs
       - ./scripts/17-delegation-test.sh 2>&1 | tee logs/delegation-test.log
 
+  web-search-test:
+    desc: 'Prova a habilidade de busca com 4 perguntas reais: dólar, bitcoin, temperatura e jogos'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/21-web-search-test.sh 2>&1 | tee logs/web-search-test.log
+
+  answers:
+    desc: 'Mostra a RESPOSTA das últimas tarefas e as ferramentas usadas, não só o estado'
+    cmds:
+      - ./scripts/22-show-answers.sh {{.CLI_ARGS}}
+
+  probe-web:
+    desc: Sonda quais fontes da web respondem ao IP de datacenter do droplet
+    cmds:
+      - mkdir -p logs
+      - ./scripts/18-probe-web-sources.sh 2>&1 | tee logs/probe-web.log
+
   persist-test:
     desc: Reinicia o droplet e prova que serviços e sessão do navegador sobrevivem
     cmds:

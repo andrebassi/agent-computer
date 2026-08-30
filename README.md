@@ -1243,6 +1243,103 @@ antes da tarefa desloca a atenção do modelo pelo mesmo motivo.
 **O limite de 8 KB protege custo, não disco.** O conteúdo entra no prompt a cada
 iteração da tarefa, não uma vez.
 
+##### A habilidade `/web-search`, e por que ela existe
+
+Buscar da nuvem é hostil, e a habilidade nasceu dessa medição — não de teoria.
+Sondado do próprio droplet em 30/08/2026 (`scripts/18-probe-web-sources.sh`):
+
+| Fonte | Devolve | Leitura |
+|---|---|---|
+| Google | `200`, 92 KB | **bloqueio disfarçado** — código diz sucesso |
+| DuckDuckGo (html e lite) | `202` | é 2xx, e é o desafio anti-bot |
+| Startpage | `200`, 22 KB | idem Google |
+| Brave | `429` | e a página contém a palavra "result", o que engana um teste de conteúdo |
+| AwesomeAPI | `429` | recusa faixa de nuvem |
+| ESPN | `403` | |
+| Globo Esporte | `200`, **858 KB** | casca vazia; o conteúdo vem por JavaScript |
+| **Bing** | `200`, 124 KB | ✅ e tem `format=rss`, que devolve XML limpo |
+| **Mojeek**, **Wikipedia**, **CoinGecko**, **Open-Meteo**, **wttr.in**, **Frankfurter** | `200` | ✅ |
+
+**Nem o código nem o conteúdo decidem sozinhos.** O Google devolve `200` com
+página de bloqueio; o Brave devolve `429` numa página cujo texto casa com
+"result". A sonda exige as duas coisas — e só `200`, não a faixa `2xx`, porque o
+`202` do DuckDuckGo é recusa.
+
+A habilidade ordena a busca do mais barato ao mais geral:
+
+| Passo | Quando | Custo |
+|---|---|---|
+| 1. `date` | sempre que a pergunta tiver palavra de tempo | ~0 |
+| 2. atalho direto | dólar, cripto, temperatura | 1 `curl`, <1 s |
+| 3. `delegate_to_code` | qualquer outra pergunta | 1 inferência |
+| 4. Bing com `format=rss` | se a delegação falhar | 1 `curl` |
+| 5. `browser_navigate` | conteúdo que só existe após JavaScript | — |
+
+O passo 1 não é detalhe: `date` devolveu `Sunday, 30/08/2026`, e foi só por isso
+que a resposta do dólar saiu **certa** — R$ 5,1641 é de sexta, 28/08, porque não
+há cotação em fim de semana. Sem descobrir o dia, o agente entregaria um número
+de dois dias atrás como se fosse de agora.
+
+**Provado com quatro perguntas** (`scripts/21-web-search-test.sh`):
+
+| Pergunta | Rota tomada | Chamadas |
+|---|---|---|
+| cotação do dólar | atalho Frankfurter | 3 |
+| preço do bitcoin | atalho CoinGecko | 2 |
+| temperatura no Rio | atalho Open-Meteo — e cruzou com wttr.in por conta própria, explicando a divergência entre modelos | 1 |
+| jogos de hoje | delegação | 2 |
+
+##### A falha que quase passou: permissão devolvida como resposta
+
+Na primeira execução, a pergunta dos jogos gastou **20 chamadas** raspando HTML
+com regex em Python, e não respondeu.
+
+A causa não era o Grok. O Claude Code em `-p` **não libera `WebSearch` por
+padrão**, e devolveu isto:
+
+```
+A ferramenta de busca na web ainda não foi liberada — preciso que você
+aprove a permissão de "WebSearch". Pode aprovar?
+```
+
+Texto normal, **código de saída zero**. Quem delegou leu como se fosse a
+resposta, concluiu que buscar era impossível, e partiu para a raspagem. É o pior
+modo de falha que esta ferramenta tem, porque não se parece com falha.
+
+A correção é `--allowedTools` com lista explícita — e **não**
+`--permission-mode bypassPermissions`: o que se quer liberar é pesquisa e
+edição, não uma procuração ampla num computador que guarda credencial de conta.
+Com a flag, a mesma pergunta passou de 20 chamadas para **2**.
+
+##### Autenticação: assinatura, não chave de API
+
+Em 30/08 a conta de API do computador ficou sem saldo no meio dos testes
+(`Credit balance is too low`) e derrubou a delegação. O token de assinatura
+(`claude setup-token`) usa o plano que já existe.
+
+| | |
+|---|---|
+| credencial | `/workspace/agent/anthropic.env`, `0600` — aceita `ANTHROPIC_API_KEY` **ou** `CLAUDE_CODE_OAUTH_TOKEN` |
+| configuração | `/workspace/agent/claude-config/` — volume **durável**; o padrão `~/.claude` morreria no `update` |
+| no cofre | `pass show bassi/anthropic/claude-code-token` |
+
+⚠️ **`claude setup-token` exige terminal de verdade.** De qualquer shell sem tty
+ele falha com `tcgetattr/ioctl: Operation not supported on socket`, e nem
+`script -q` contorna — o próprio `script` precisa do tty que não existe. Por
+isso `scripts/20-setup-subscription-token.sh` lê o token do **stdin**:
+
+```bash
+claude setup-token | scripts/20-setup-subscription-token.sh
+```
+
+O valor nunca é impresso: entra por `mktemp` sob `umask 077`, vai ao `pass` e ao
+droplet, e o arquivo morre em `shred`.
+
+⚠️ **O arquivo de credencial vence o ambiente herdado**, e há teste para isso.
+Sem essa precedência, uma `ANTHROPIC_API_KEY` velha no ambiente mascararia o
+token e a delegação falharia por saldo — apontando o diagnóstico para a conta
+errada.
+
 O nome vem do texto que a pessoa digitou, depois de passar pelo parser de
 marcadores, e por isso é validado antes de virar caminho de arquivo — um nome com
 subida de diretório gravaria fora da pasta.
@@ -1898,6 +1995,8 @@ task destroy      # derruba o droplet (o volume fica, US$ 2/mês)
 ## o binário do agente
 task deploy           # gate de cobertura + compila + instala em /workspace
 task delegation-test  # prova a delegação com a tarefa mista (web + código)
+task web-search-test  # prova a busca com 4 perguntas reais
+task answers          # mostra a RESPOSTA das últimas tarefas, não só o estado
 
 ## dentro da máquina
 screen-add 2      # cria a tela 2
