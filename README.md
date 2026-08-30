@@ -20,6 +20,13 @@ arquitetura**, montada do zero e validada contra a doc item por item.
 
 Lab — serve para testar o conceito, não para produção.
 
+## Documentação
+
+| Documento | O que traz |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | **Comece por aqui.** Arquitetura ponta a ponta, o modelo do Grok Bot explicado, as 10 cláusulas uma a uma com código e prova, decisões, armadilhas |
+| [`docs/fidelity.md`](docs/fidelity.md) | Auditoria cláusula por cláusula, com placar do que existe e do que falta |
+
 ## Arquitetura
 
 O ponto que decide tudo: **o droplet é descartável, o volume é o computador.**
