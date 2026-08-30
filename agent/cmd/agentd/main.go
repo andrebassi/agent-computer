@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/connectors"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
@@ -65,21 +66,53 @@ func main() {
 		stateDir     = flag.String("state", "/workspace/agent", "diretório de estado durável")
 		modelName    = flag.String("model", "", "modelo da xAI (padrão: grok-4.6)")
 		catalog      = flag.Bool("catalog", false, "gerencia conectores e habilidades; use -catalog list")
+		notifyDrain  = flag.Bool("notify-drain", false, "entrega os avisos enfileirados e limpa a fila")
+		webhookURL   = flag.String("webhook", "", "destino HTTP dos avisos; sem ele, -notify-drain só lista")
 	)
 	flag.Parse()
 
-	if err := run(*screenNumber, *prompt, *taskID, *note, *stateDir, *modelName, *resume, *abandon, *catalog, flag.Args()); err != nil {
+	opts := runOptions{
+		screen: *screenNumber, prompt: *prompt, taskID: *taskID, note: *note,
+		stateDir: *stateDir, model: *modelName, webhook: *webhookURL,
+		resume: *resume, abandon: *abandon, catalog: *catalog, drain: *notifyDrain,
+		rest: flag.Args(),
+	}
+	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
 		os.Exit(exitFailure)
 	}
 }
 
+// runOptions agrupa o que veio da linha de comando.
+//
+// Vira struct porque a lista de parâmetros passou de dez, e uma chamada com dez
+// posicionais — quatro deles bool seguidos — troca dois argumentos de lugar sem
+// o compilador notar.
+type runOptions struct {
+	screen                          int
+	prompt, taskID, note, stateDir  string
+	model, webhook                  string
+	resume, abandon, catalog, drain bool
+	rest                            []string
+}
+
 // run monta as dependências concretas e executa a ação pedida.
-func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, resume, abandon, catalog bool, rest []string) error {
+func run(o runOptions) error {
+	screenNumber, prompt, taskID := o.screen, o.prompt, o.taskID
+	note, stateDir, modelName := o.note, o.stateDir, o.model
+	resume, abandon, catalog, rest := o.resume, o.abandon, o.catalog, o.rest
+
 	// Gerenciar catálogo é operação local, como abandonar: nada de modelo nem
 	// de chave da API.
 	if catalog {
 		return runCatalog(stateDir, rest)
+	}
+
+	// Drenar avisos é operação local e roda em PROCESSO SEPARADO, chamado por
+	// timer. É o que satisfaz o requisito de a entrega não depender da conexão
+	// que iniciou a tarefa — e por isso não pede chave de modelo nenhuma.
+	if o.drain {
+		return runDrain(context.Background(), stateDir, o.webhook)
 	}
 
 	// Abandonar é operação local: não chama o modelo nem carrega conectores.
@@ -186,7 +219,27 @@ func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, res
 	// procedimento como o objetivo.
 	prompt = request.Prompt + expanded
 
-	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions)
+	// Destino dos avisos: uma fila em disco, no volume durável.
+	//
+	// Ele GRAVA e retorna — não envia nada. Quem entrega é `agentd
+	// -notify-drain`, um processo separado chamado por timer. É essa separação
+	// que faz o aviso sobreviver à queda da sessão que iniciou a tarefa: no
+	// projeto anterior, o transporte de saída disputava a conexão de entrada, e o
+	// agendador precisava DERRUBAR o serviço para conseguir falar.
+	//
+	// Publicar é escrita local, então não pode travar a tarefa esperando um
+	// serviço remoto responder — e a tarefa está segurando a trava da tela.
+	eventSpool, err := events.NewSpool(stateDir + "/events")
+	if err != nil {
+		return err
+	}
+	// Só o que PEDE AÇÃO é enfileirado. Avisar de tudo ensina quem recebe a
+	// ignorar, inclusive o pedido de take-over — o único que trava a tela até
+	// alguém agir.
+	eventSink := events.OnlyKinds(eventSpool, domain.EventBlocked, domain.EventFailed)
+
+	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
+		service.WithEventSink(eventSink))
 
 	// Ctrl+C precisa liberar a trava da tela: sem isto, uma interrupção deixaria
 	// a tela travada até alguém apagar o arquivo à mão.

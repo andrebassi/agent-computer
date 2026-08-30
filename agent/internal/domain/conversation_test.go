@@ -188,7 +188,7 @@ func TestCompactNeverLeavesOrphanToolResult(t *testing.T) {
 // receberia o mesmo erro, e "comprime e tenta de novo" viraria laço infinito.
 func TestCompactRefusesWhenAlreadyMinimal(t *testing.T) {
 	casos := []struct {
-		nome string
+		nome  string
 		monta func() *Conversation
 	}{
 		{"só sistema", func() *Conversation { return NewConversation("t1", "regras") }},
