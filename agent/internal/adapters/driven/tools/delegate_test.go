@@ -33,7 +33,7 @@ func TestDelegateSpecSaysWhenNotToDelegate(t *testing.T) {
 // É o erro mais provável em máquina recém-criada, e um "falhou" genérico faria
 // procurar defeito no agente de código em vez de no arquivo de ambiente.
 func TestDelegateReportsMissingCredential(t *testing.T) {
-	d := NewDelegate(t.TempDir(), filepath.Join(t.TempDir(), "nao-existe.env"))
+	d := NewDelegate(t.TempDir(), filepath.Join(t.TempDir(), "missing.env"))
 	result, err := d.Execute(context.Background(), 1, `{"task":"conserte o teste"}`)
 	if err != nil {
 		t.Fatalf("credencial ausente não devia virar erro de execução: %v", err)
@@ -41,7 +41,7 @@ func TestDelegateReportsMissingCredential(t *testing.T) {
 	if !result.Failed {
 		t.Fatal("devia marcar falha")
 	}
-	if !strings.Contains(result.Output, "credencial") || !strings.Contains(result.Output, "nao-existe.env") {
+	if !strings.Contains(result.Output, "credencial") || !strings.Contains(result.Output, "missing.env") {
 		t.Fatalf("a mensagem devia dizer o que falta e onde: %q", result.Output)
 	}
 }
@@ -49,7 +49,7 @@ func TestDelegateReportsMissingCredential(t *testing.T) {
 // Arquivo de ambiente vazio é tão inútil quanto ausente, e precisa dizer isso.
 func TestDelegateRejectsEmptyEnvFile(t *testing.T) {
 	dir := t.TempDir()
-	envFile := filepath.Join(dir, "vazio.env")
+	envFile := filepath.Join(dir, "empty.env")
 	if err := os.WriteFile(envFile, []byte("# só um comentário\n\n"), 0o600); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
@@ -75,13 +75,13 @@ func TestDelegateRejectsEmptyTask(t *testing.T) {
 	}
 	// Um executável que sempre dá certo: se a validação sumir, a chamada passa
 	// e o teste reprova — que é o que o canário precisa enxergar.
-	sempreOk := filepath.Join(dir, "agente-que-aceita-tudo")
-	if err := os.WriteFile(sempreOk, []byte("#!/bin/sh\necho pronto\n"), 0o755); err != nil {
+	alwaysSucceeds := filepath.Join(dir, "always-succeeds-agent")
+	if err := os.WriteFile(alwaysSucceeds, []byte("#!/bin/sh\necho pronto\n"), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
 	d := NewDelegate(dir, envFile)
-	d.binary = sempreOk
+	d.binary = alwaysSucceeds
 	for _, args := range []string{`{}`, `{"task":"   "}`} {
 		result, err := d.Execute(context.Background(), 1, args)
 		if err != nil {
@@ -128,14 +128,14 @@ func TestDelegateRunsAgentWithTaskAndCredential(t *testing.T) {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
-	falso := filepath.Join(dir, "agente-falso")
+	fakeAgent := filepath.Join(dir, "fake-agent")
 	script := "#!/bin/sh\necho \"modo:$1\"\necho \"tarefa:$2\"\necho \"credencial:$ANTHROPIC_API_KEY\"\n"
-	if err := os.WriteFile(falso, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(fakeAgent, []byte(script), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
 	d := NewDelegate(dir, envFile)
-	d.binary = falso
+	d.binary = fakeAgent
 	result, err := d.Execute(context.Background(), 1, `{"task":"conserte o teste de login"}`)
 	if err != nil {
 		t.Fatalf("Execute falhou: %v", err)
@@ -162,13 +162,13 @@ func TestDelegateReportsAgentFailureAsText(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte("ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	falso := filepath.Join(dir, "agente-que-falha")
-	if err := os.WriteFile(falso, []byte("#!/bin/sh\necho 'nao consegui compilar'\nexit 1\n"), 0o755); err != nil {
+	fakeAgent := filepath.Join(dir, "failing-agent")
+	if err := os.WriteFile(fakeAgent, []byte("#!/bin/sh\necho 'nao consegui compilar'\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
 	d := NewDelegate(dir, envFile)
-	d.binary = falso
+	d.binary = fakeAgent
 	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
 	if err != nil {
 		t.Fatalf("falha do agente não devia virar erro de execução: %v", err)
@@ -184,16 +184,16 @@ func TestDelegateReportsAgentFailureAsText(t *testing.T) {
 // Relatório longo é cortado, porque entra no prompt de todas as iterações
 // seguintes de quem delegou.
 func TestTruncateDelegateOutput(t *testing.T) {
-	longo := strings.Repeat("r", maxDelegateOutput+500)
-	got := truncateDelegateOutput(longo)
-	if len(got) >= len(longo) {
+	longReport := strings.Repeat("r", maxDelegateOutput+500)
+	got := truncateDelegateOutput(longReport)
+	if len(got) >= len(longReport) {
 		t.Fatal("relatório longo devia ser cortado")
 	}
 	if !strings.Contains(got, "truncado") {
 		t.Fatalf("devia avisar que cortou: %q", got[len(got)-80:])
 	}
-	if curto := truncateDelegateOutput("resumo curto"); curto != "resumo curto" {
-		t.Fatalf("relatório curto foi alterado: %q", curto)
+	if shortReport := truncateDelegateOutput("resumo curto"); shortReport != "resumo curto" {
+		t.Fatalf("relatório curto foi alterado: %q", shortReport)
 	}
 }
 
@@ -202,8 +202,8 @@ func TestTruncateDelegateOutput(t *testing.T) {
 func TestReadEnvFileParsesAndKeepsSecretOutOfErrors(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "cred.env")
-	conteudo := "# comentário\n\nANTHROPIC_API_KEY=valor-secreto\nOUTRA=coisa\nlinha-sem-igual\n"
-	if err := os.WriteFile(envFile, []byte(conteudo), 0o600); err != nil {
+	content := "# comentário\n\nANTHROPIC_API_KEY=valor-secreto\nOUTRA=coisa\nlinha-sem-igual\n"
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 	env, err := readEnvFile(envFile)
@@ -215,7 +215,7 @@ func TestReadEnvFileParsesAndKeepsSecretOutOfErrors(t *testing.T) {
 	}
 
 	// O erro de arquivo ausente não pode citar valor nenhum.
-	_, err = readEnvFile(filepath.Join(dir, "sumido.env"))
+	_, err = readEnvFile(filepath.Join(dir, "gone.env"))
 	if err == nil {
 		t.Fatal("arquivo ausente devia falhar")
 	}
@@ -236,13 +236,13 @@ func TestDelegateReportsTimeout(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte("ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	lento := filepath.Join(dir, "agente-lento")
-	if err := os.WriteFile(lento, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+	slowAgent := filepath.Join(dir, "slow-agent")
+	if err := os.WriteFile(slowAgent, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
 	d := NewDelegate(dir, envFile)
-	d.binary = lento
+	d.binary = slowAgent
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
@@ -266,13 +266,13 @@ func TestDelegateReportsSilentAgent(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte("ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	mudo := filepath.Join(dir, "agente-mudo")
-	if err := os.WriteFile(mudo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	silentAgent := filepath.Join(dir, "silent-agent")
+	if err := os.WriteFile(silentAgent, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
 
 	d := NewDelegate(dir, envFile)
-	d.binary = mudo
+	d.binary = silentAgent
 	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
 	if err != nil {
 		t.Fatalf("Execute falhou: %v", err)
@@ -293,7 +293,7 @@ func TestReadEnvFileRejectsEmptyPath(t *testing.T) {
 // Erro de leitura que NÃO é "arquivo ausente" precisa propagar como está — um
 // diretório no lugar do arquivo não é falta de credencial.
 func TestReadEnvFileSurfacesOtherReadErrors(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "diretorio-no-lugar-do-arquivo")
+	dir := filepath.Join(t.TempDir(), "directory-instead-of-file")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}

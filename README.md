@@ -14,7 +14,7 @@ arquitetura**, montada do zero e validada contra a doc item por item.
 
 | Suíte | O que prova |
 |---|---|
-| `task validate` | 9 seções: units, volume, fronteira, portas, firewall, X, Chrome, noVNC, pixel |
+| `task validate` | 10 seções: units, volume, fronteira, portas, firewall, X, Chrome, noVNC, pixel, agente de código |
 | `task integration-test` | **12 seções na máquina real, contra o Grok real**: do estado durável ao take-over, com conector e habilidade |
 | `scripts/09-persistence-test.sh` | reboot real: serviços sobem sozinhos, sessão do navegador sobrevive |
 | `scripts/12-update-test.sh` | rebuild real: `/workspace` sobrevive, `/scratch` e pacote manual somem |
@@ -137,7 +137,7 @@ task up           # cria volume (se faltar), droplet, espera e valida
 task open         # túnel SSH + tela no navegador
 task ssh          # shell como usuário agent
 task screens      # telas ativas, estado durável, recursos
-task validate     # as 9 seções
+task validate     # as 10 seções
 task snapshot     # snapshot do volume durável
 task update       # rebuild preservando o durável
 task reset        # volta ao snapshot, descarta trabalho recente
@@ -321,6 +321,26 @@ quando o SSH já autenticava e só o arquivo-marca faltava — porque `cat` de
 arquivo inexistente devolve rc=1. Custou 12 minutos de diagnóstico na direção
 errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
 
+### `runcmd` não aborta, e o cloud-init reporta sucesso mesmo assim
+
+Comando que falha dentro de `runcmd` **não interrompe o cloud-init**. Ele segue
+para o próximo, escreve `READY` no fim e reporta `status: done`. Um
+`npm install -g` morto por rede deixaria o computador sem agente de código com
+todos os sinais de saúde verdes.
+
+O que torna isso pior que uma falha ruidosa: a ausência só apareceria na
+primeira tarefa que delegasse, como *"o agente de código não está configurado"*
+— mensagem que manda procurar no **arquivo de credencial**, que está lá e
+correto. O diagnóstico começa no lugar errado.
+
+Fechado com retry, marcador em `/var/lib/agent-computer-code-agent` e uma seção
+do `task validate` que separa binário ausente de credencial ausente.
+
+**Erro de raciocínio junto:** a pendência original dizia *"o Claude Code está em
+`/usr/bin`, some no update"*. A dedução sobre o filesystem estava certa e a
+conclusão errada — o `cloud-init` o reinstala em todo rebuild, e ele estava lá
+desde o primeiro commit. Ler o arquivo antes teria custado dez segundos.
+
 ### Outras
 
 - **`lib.sh` não tem `set -e`.** É sourceado: o flag vazaria e mataria o script
@@ -372,10 +392,13 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
       arquivos Python e os 4 testes passaram, verificados de fora por SSH.
       Ver §5.6 e o segundo caso real.
 
-- [ ] **O Claude Code não sobrevive ao `update`** — ele está em `/usr/bin`, que é
-      disco do sistema, e o `update` destrói o droplet remontando só o volume. A
-      credencial está no volume e volta sozinha; o binário não. Corrigir é
-      instalá-lo pelo `cloud-init`.
+- [x] ~~O Claude Code não sobrevive ao `update`~~ — **a pendência estava errada, e
+      a correção verdadeira é outra.** Ele já era instalado pelo `cloud-init`
+      desde o primeiro commit (Node 22 + `npm install -g`), então todo rebuild o
+      reinstala. O que faltava era **verificação**: `runcmd` não aborta quando um
+      comando falha, e um `npm` morto por rede deixaria o droplet sem agente de
+      código com o cloud-init reportando sucesso. Corrigido com retry, marcador
+      em `/var/lib/agent-computer-code-agent` e a seção 10 do `task validate`.
 
 - [x] ~~CloakBrowser~~ — **avaliado**: Chromium com 73 patches em C++, reCAPTCHA
       v3 em 0,9. Decisão registrada: **não entra** — contradiz a regra nº 1 do
@@ -1283,11 +1306,28 @@ que ninguém escolheu.
 Falha do Claude Code volta como **texto**, não derruba a tarefa: quem delegou
 pode tentar outra abordagem, ou pedir take-over.
 
-⚠️ **O `claude` está em `/usr/bin`, que é disco do sistema.** Um `update`
-(§Operação) destrói o droplet e remonta só o volume — o Claude Code **não
-sobrevive** a isso e precisa ser reinstalado. A credencial, essa sim, está no
-volume durável e volta sozinha. Corrigir isto é instalar o Claude Code pelo
-`cloud-init`, e está na lista de pendências.
+**Onde cada metade mora, e por quê:**
+
+| | Onde | O que acontece no `update` |
+|---|---|---|
+| binário `claude` | `/usr/bin` — disco do **sistema** | reinstalado pelo `cloud-init`, na versão corrente |
+| credencial | `/workspace/agent/anthropic.env`, permissão `0600` — volume **durável** | volta sozinha |
+
+A divisão é deliberada: o binário no disco do sistema faz cada rebuild pegar a
+versão atual, em vez de arrastar uma versão velha presa no volume. A credencial
+no volume é o que dispensa reconfigurar depois de todo `update`.
+
+⚠️ **`runcmd` não aborta quando um comando falha.** Um `npm install -g` morto por
+rede ou registry fora deixaria o computador sem agente de código, com o
+cloud-init reportando sucesso e a marca `READY` no lugar — e a falha só
+apareceria na primeira delegação, como *"o agente de código não está
+configurado"*, mensagem que manda procurar no arquivo de credencial em vez de na
+instalação.
+
+Fechado com três coisas: **retry** (3 tentativas), **marcador** em
+`/var/lib/agent-computer-code-agent` com a versão ou `FALHOU`, e a **seção 10 do
+`task validate`**, que separa "binário ausente" de "credencial ausente" — são
+diagnósticos diferentes e a correção de cada um é outra.
 
 ---
 
@@ -1849,7 +1889,7 @@ task check        # binários, token, chave, latência — ANTES de gastar
 task up           # volume + droplet + espera + valida
 task open         # túnel SSH e a tela no navegador
 task screens      # telas ativas, estado durável, recursos
-task validate     # as 9 seções
+task validate     # as 10 seções
 task snapshot     # snapshot do volume durável
 task update       # rebuild preservando o durável
 task reset        # volta ao snapshot
@@ -1914,7 +1954,7 @@ cd agent && ./scripts/coverage-gate.sh   # mede E reprova
 
 | Suíte | O que prova |
 |---|---|
-| `task validate` | 9 seções da infraestrutura, `erros: 0` |
+| `task validate` | 10 seções da infraestrutura, `erros: 0` |
 | `09-persistence-test.sh` | reboot real: serviços sobem, sessão sobrevive |
 | `12-update-test.sh` | rebuild real: a fronteira durável×descartável vale |
 | `coverage-gate.sh` | 91,7% total, domínio 100% |
@@ -2050,11 +2090,11 @@ Cada linha é uma afirmação da doc, não uma ideia nossa. `✅` foi implementa
 
 ### Placar
 
-| | 29/08 manhã | 29/08 depois do agente |
-|---|---|---|
-| ✅ implementado e testado | 24 | **35** |
-| ⚠️ parcial | 2 | **3** |
-| ❌ ausente | 13 | **4** |
+| | 29/08 manhã | 29/08 depois do agente | 30/08 |
+|---|---|---|---|
+| ✅ implementado e testado | 24 | 35 | **36** |
+| ⚠️ parcial | 2 | 3 | **3** |
+| ❌ ausente | 13 | 4 | **3** |
 
 #### O que ainda falta, e por quê
 
@@ -2062,8 +2102,12 @@ Cada linha é uma afirmação da doc, não uma ideia nossa. `✅` foi implementa
 |---|---|
 | tela de catálogo (`Settings → Plugins`) | é interface gráfica, não infraestrutura; o catálogo em si existe |
 | secret request como fluxo de tela | o tipo e a garantia existem no domínio; falta a tela que coleta |
-| detecção de computador inalcançável | `task update` recupera; falta o estado de erro que o dispara sozinho |
 | cookies compartilhados entre telas | divergência com motivo técnico — o Chrome trava o `user-data-dir` |
+
+> **Corrigido em 30/08.** *"Detecção de computador inalcançável"* constava aqui
+> como ausente enquanto a lista de pendências já a dava por fechada — `task
+> health` separa os quatro diagnósticos e indica a recuperação menos destrutiva
+> primeiro. As duas listas divergiam; esta estava desatualizada.
 
 #### Provado contra o Grok de verdade, no droplet
 

@@ -359,9 +359,27 @@ runcmd:
   - [ bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq google-chrome-stable" ]
 
   # Node 22 + Claude Code, para o agente rodar dentro da propria maquina.
+  #
+  # Ele mora no disco do SISTEMA, e nao no volume duravel -- de proposito. Todo
+  # rebuild reinstala a versao corrente em vez de arrastar uma versao velha
+  # presa no volume, que e o que aconteceria se ele morasse em /workspace. A
+  # credencial, essa sim, fica no volume e volta sozinha.
+  #
+  # Sem pin de versao: o agente de codigo evolui rapido, e travar a versao aqui
+  # significaria descobrir a defasagem so quando algo quebrasse.
   - [ bash, -c, "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -" ]
   - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs" ]
-  - [ bash, -c, "npm install -g @anthropic-ai/claude-code 2>&1 | tail -2" ]
+
+  # Retry, e marcador do resultado.
+  #
+  # `runcmd` NAO aborta quando um comando falha: um npm que morresse por rede ou
+  # registry fora deixaria o droplet sem agente de codigo, com o cloud-init
+  # reportando sucesso e a marca READY no lugar. A falha so apareceria na
+  # primeira delegacao, como "o agente de codigo nao esta configurado" --
+  # mensagem que manda procurar no lugar errado.
+  #
+  # O marcador e o que `task validate` le, na secao 10.
+  - [ bash, -c, "for i in 1 2 3; do npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && break; sleep 5; done; if command -v claude >/dev/null 2>&1; then claude --version > /var/lib/agent-computer-code-agent 2>&1; else echo FALHOU > /var/lib/agent-computer-code-agent; fi" ]
 
   # Tailscale instalado mas NAO autenticado: sem authkey no cofre, o login e
   # um clique do dono. Fica pronto para quando ele quiser a maquina na malha.

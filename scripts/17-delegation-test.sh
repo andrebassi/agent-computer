@@ -28,7 +28,7 @@ agent_ssh "rm -rf '$projectDir' && echo limpo"
 
 echo
 echo "=== 2/4 rodando a tarefa mista ==="
-tarefa="Abra no navegador https://api.github.com/repos/golang/go e leia o valor do campo stargazers_count. \
+taskText="Abra no navegador https://api.github.com/repos/golang/go e leia o valor do campo stargazers_count. \
 Depois use delegate_to_code para pedir ao agente de codigo: crie em ${projectDir} um modulo Python \
 formatter.py com a funcao format_count(n) que devolve o numero com separador de milhar por ponto \
 (exemplo: 1234567 vira 1.234.567), um main.py que imprime format_count do valor real que voce leu, e \

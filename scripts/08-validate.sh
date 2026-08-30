@@ -128,5 +128,34 @@ echo "=== 9. recursos ==="
 agent_ssh 'free -m | awk "/^Mem:/ {printf \"  RAM: %s MB usados de %s MB (%.0f%%)\n\", \$3, \$2, \$3/\$2*100}"; df -h / | awk "NR==2 {printf \"  disco: %s de %s (%s)\n\", \$3, \$2, \$5}"'
 
 echo
+echo "=== 10. agente de código, para a delegação ==="
+# Sem isto, a falha do `npm install -g` no cloud-init só apareceria na primeira
+# tarefa que delegasse — como "o agente de código não está configurado", que
+# manda procurar no arquivo de credencial em vez de na instalação.
+marker="$(agent_ssh 'cat /var/lib/agent-computer-code-agent 2>/dev/null')"
+agentVersion="$(agent_ssh 'claude --version 2>/dev/null' | head -1)"
+if [ -n "$agentVersion" ]; then
+  ok "agente de código instalado: $agentVersion"
+elif [ "$marker" = "FALHOU" ]; then
+  fail "o cloud-init NÃO conseguiu instalar o agente de código — delegação indisponível"
+else
+  fail "agente de código ausente e sem marcador — cloud-init anterior à correção?"
+fi
+
+# A credencial é estado durável e mora no volume: ela sobrevive ao rebuild que
+# reinstala o binário. Faltar aqui é diagnóstico diferente de faltar o binário,
+# e a correção é outra — por isso são duas checagens, e não uma.
+if agent_ssh 'test -f /workspace/agent/anthropic.env' 2>/dev/null; then
+  perm="$(agent_ssh 'stat -c %a /workspace/agent/anthropic.env 2>/dev/null')"
+  if [ "$perm" = "600" ]; then
+    ok "credencial do agente de código presente, permissão $perm"
+  else
+    fail "credencial com permissão $perm — deve ser 600"
+  fi
+else
+  fail "credencial ausente em /workspace/agent/anthropic.env — a delegação vai falhar"
+fi
+
+echo
 echo "erros: $errs"
 exit $errs
