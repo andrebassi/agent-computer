@@ -86,8 +86,31 @@ task open      # túnel + tela no navegador local
 
 Consequência assumida: **quem tem a chave SSH tem o desktop**, sem segunda
 senha. Para um lab de duas pessoas é a troca certa — senha VNC exposta seria
-pior. Para ampliar, o passo é autenticar o Tailscale (`sudo tailscale up` no
-droplet imprime a URL de login) e compartilhar o nó.
+pior.
+
+### Pela malha Tailscale
+
+O computador também entra na malha, como `agent-computer`. Os scripts **preferem
+a malha** e caem para o IP público se ela não estiver disponível:
+
+```
+$ task open
+rota: malha Tailscale (100.70.182.102)
+```
+
+O ganho não é estético: **o IP público muda a cada rebuild do droplet**, e o
+endereço da malha não. Cinco reconstruções num dia produziram cinco IPs
+diferentes, cada uma invalidando comando anotado, entrada de `known_hosts` e
+túnel aberto. Na malha o acesso também passa a ser governado pela ACL do tailnet,
+o que permite compartilhar o nó sem entregar a chave SSH da máquina.
+
+A reserva é silenciosa e **testada nos três cenários**: malha no ar, nó offline
+nela, e cliente ausente da máquina. Uma malha caída não pode impedir o acesso a
+um computador que está de pé.
+
+Ligar: `./scripts/15-tailscale-up.sh` imprime a URL de autorização. O script
+**não liga `--ssh`** de propósito — isso abriria acesso ao shell governado pela
+ACL do tailnet, que é decisão de segurança separada de "entrar na malha".
 
 ## Comandos
 
@@ -267,8 +290,8 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
       diagnósticos e indica a recuperação **menos destrutiva primeiro**
 - [ ] **Cookies compartilhados entre telas** — divergência com motivo técnico; os
       quatro contornos avaliados estão documentados, nenhum é limpo
-- [ ] **Tailscale autenticado** — depende de um clique seu: não há authkey no cofre,
-      e `sudo tailscale up` imprime a URL de login
+- [x] ~~Tailscale autenticado~~ — na malha como `agent-computer`; os scripts
+      preferem a malha, com o IP público como reserva testada
 - [ ] **KasmVNC** — daria resolução dinâmica no lugar do 1920×1080 fixo; avaliar exige
       subir o droplet e medir, e o ganho é conforto, não capacidade
 
