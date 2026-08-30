@@ -115,3 +115,35 @@ agent_ssh() {
       -o ConnectTimeout=10 \
       "agent@${ip}" "$@"
 }
+
+# root_ssh executa como root no droplet.
+#
+# É a autoridade do OPERADOR, e ela é a chave SSH que existe só no Mac.
+#
+# Existe porque operador e modelo compartilham o usuário `agent`: toda permissão
+# dada ao operador por sudoers é dada ao modelo junto. Foi assim que uma regra
+# de conveniência (`agent ALL=(agentd) agentd -catalog *`) desfez a proteção que
+# impede o modelo de cadastrar conector apontando para onde quiser.
+#
+# Por aqui não há esse vazamento: o modelo não alcança esta chave por caminho
+# nenhum. Usar para deploy, catálogo e cofre — nunca para diagnóstico, que deve
+# rodar com o usuário restrito para exercitar as permissões de verdade.
+root_ssh() {
+  local ip; ip="$(agent_host)"
+  [ -z "$ip" ] && { echo "🛑 droplet '$DROPLET_NAME' não existe" >&2; return 1; }
+  ssh -i "$SSH_KEY_FILE" \
+      -o StrictHostKeyChecking=accept-new \
+      -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+      -o ConnectTimeout=10 \
+      "root@${ip}" "$@"
+}
+
+# agentd_run roda o agentd como o usuário dono do cofre.
+#
+# Entra por root e desce para `agentd` — nunca por `agent`, que é o usuário do
+# modelo. `setpriv` em vez de `sudo` porque não depende de regra em sudoers:
+# a autoridade aqui já é root, e uma linha a menos no sudoers é uma linha a
+# menos que o modelo poderia herdar.
+agentd_run() {
+  root_ssh "setpriv --reuid=agentd --regid=agentd --init-groups -- /usr/local/bin/agentd $*"
+}

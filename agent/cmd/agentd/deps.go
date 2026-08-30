@@ -14,6 +14,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driving/api"
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -48,12 +49,21 @@ func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, err
 	d := &deps{stateDir: stateDir, verbose: verbose}
 
 	if needsModel {
-		// A chave vem só do ambiente, e quem a coloca lá é o wrapper que a lê do
-		// cofre. Assim ela nunca aparece em linha de comando, onde `ps` a
-		// exporia a qualquer processo da máquina.
-		apiKey := os.Getenv("XAI_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("XAI_API_KEY não está no ambiente")
+		// A chave vem do COFRE e, na falta dele, do ambiente. Nunca de
+		// argumento: `ps` mostra a linha de comando de qualquer processo a
+		// qualquer usuário da máquina.
+		//
+		// Este é o caminho do `-serve`, e ele ficou de fora quando o caminho da
+		// linha de comando passou a usar o cofre. O sintoma foi a porta HTTP
+		// subir e morrer em laço com "XAI_API_KEY não está no ambiente", com a
+		// chave gravada no cofre ao lado — o tipo de divergência que só aparece
+		// na máquina, porque cada caminho monta as dependências por si.
+		apiKey, source, err := resolveModelKey(context.Background(), stateDir)
+		if err != nil {
+			return nil, err
+		}
+		if source != vault.SourceVault {
+			fmt.Fprintf(os.Stderr, "aviso: chave do modelo veio do %s, não do cofre\n", source)
 		}
 		options := []xai.Option{}
 		if modelName != "" {

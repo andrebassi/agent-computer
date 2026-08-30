@@ -45,6 +45,13 @@ load_token
 # gravado sob outro nome -- falha que manda procurar no lugar errado.
 declare -a mapping=(
   "agent/xai/apikey=bassi/xai/apikey"
+  # O token da porta HTTP tambem vem daqui.
+  #
+  # O arquivo /workspace/agent/api-token continua existindo, mas so para o LADO
+  # CLIENTE: ele e `agent:agent 0600`, e depois da separacao de usuario o
+  # `agentd` nao o le -- o servico morria com "permission denied" num arquivo
+  # que existia. O servidor le do cofre; o operador le do arquivo.
+  "agent/http/token=bassi/agent-computer/api-token"
 )
 
 echo "1/4 conferindo o cofre local"
@@ -65,7 +72,21 @@ echo "2/4 conferindo o preparo da maquina"
 # A senha do cofre e gerada NO DROPLET pelo cloud-init e nunca transportada.
 # Sem ela o binario recusa a criacao, e a mensagem dele ja diz isto -- mas
 # conferir aqui poupa uma viagem e da um erro mais proximo da causa.
-prep="$(agent_ssh 'test -s /etc/agentd/vault.pass && stat -c "%U:%G %a" /etc/agentd/vault.pass || echo AUSENTE' | tr -d '\r')"
+#
+# ATENCAO: a conferencia vai por SSH de ROOT, e nao como `agent`.
+#
+# Custou um falso negativo descobrir: /etc/agentd e 0700 do agentd, entao o
+# `test -s` rodando como `agent` recebia "permission denied" e o script relatava
+# "vault.pass nao existe" com o arquivo la. O verificador acusava de ausencia o
+# que era a protecao funcionando -- e mandava rodar `task update` a toa.
+#
+# A licao vale alem deste script: verificacao que roda com o usuario RESTRITO
+# nao consegue distinguir "nao existe" de "nao posso ver".
+rootHost="$(agent_host)"
+prep="$(timeout 30s ssh -i "$SSH_KEY_FILE" \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+  "root@${rootHost}" 'test -s /etc/agentd/vault.pass && stat -c "%U:%G %a" /etc/agentd/vault.pass || echo AUSENTE' | tr -d '\r')"
 case "$prep" in
   "agentd:agentd 600") echo "  ✅ senha do cofre presente, $prep" ;;
   AUSENTE) echo "  🛑 /etc/agentd/vault.pass nao existe — o droplet e anterior a esta versao do cloud-init; rode 'task update'"; exit 1 ;;

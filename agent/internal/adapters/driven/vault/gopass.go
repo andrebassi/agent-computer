@@ -73,6 +73,17 @@ type secretReader interface {
 // Gopass lê segredos de um store gopass já inicializado.
 type Gopass struct {
 	store secretReader
+	// unlock injeta no contexto o callback que decifra a identidade age.
+	//
+	// Fica AQUI, e não a cargo de quem chama, por um defeito que só apareceu na
+	// máquina: a decifragem não acontece ao abrir o store, e sim a cada leitura.
+	// Passar o callback apenas para api.New deixava todo Get cair no pinentry
+	// interativo, e o serviço morria em laço com "pinentry: unexpected response"
+	// — com a senha ali, a um contexto de distância.
+	//
+	// Pior: o teste de ida e volta passava, porque ele chamava Get com o
+	// contexto especial. O teste contornava o defeito em vez de expô-lo.
+	unlock func(context.Context) context.Context
 }
 
 // Open abre o cofre apontado pelas variáveis de ambiente do gopass.
@@ -112,7 +123,7 @@ func (g *Gopass) Get(ctx context.Context, key string) (string, error) {
 	if err := validateKey(key); err != nil {
 		return "", err
 	}
-	secret, err := g.store.Get(ctx, key, "latest")
+	secret, err := g.store.Get(g.withUnlock(ctx), key, "latest")
 	if err != nil {
 		if isNotFound(err) {
 			return "", fmt.Errorf("%w: %s", ErrSecretNotFound, key)
@@ -135,6 +146,16 @@ func (g *Gopass) Get(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("%w: %s está no cofre mas sem valor", ErrSecretNotFound, key)
 	}
 	return value, nil
+}
+
+// withUnlock devolve o contexto com o callback da senha, quando há um.
+//
+// Sem callback (o construtor de teste), devolve o contexto como veio.
+func (g *Gopass) withUnlock(ctx context.Context) context.Context {
+	if g == nil || g.unlock == nil {
+		return ctx
+	}
+	return g.unlock(ctx)
 }
 
 // validateKey recusa nome que escaparia do diretório do store.

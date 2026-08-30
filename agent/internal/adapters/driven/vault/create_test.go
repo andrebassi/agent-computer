@@ -42,7 +42,14 @@ func TestCreateWriteAndReadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abertura falhou: %v", err)
 	}
-	got, err := store.Get(cfg.withPassphrase(ctx), key)
+	// Contexto NORMAL, sem a senha injetada — é assim que a produção chama.
+	//
+	// Este teste passava com `cfg.withPassphrase(ctx)` e escondia o defeito: a
+	// decifragem acontece a cada leitura, não ao abrir o store, e o adapter não
+	// carregava o callback. Na máquina o serviço morria em laço no pinentry.
+	// Um teste que prepara o contexto que a produção não prepara não testa a
+	// produção.
+	got, err := store.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("leitura falhou: %v", err)
 	}
@@ -163,7 +170,7 @@ func TestWrongPassphraseCannotReadTheSecret(t *testing.T) {
 	if err != nil {
 		return // recusar já na abertura também satisfaz
 	}
-	if _, err := store.Get(wrong.withPassphrase(ctx), "bassi/xai/apikey"); err == nil {
+	if _, err := store.Get(ctx, "bassi/xai/apikey"); err == nil {
 		t.Fatal("a senha errada leu o segredo")
 	}
 }

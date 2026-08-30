@@ -123,20 +123,18 @@ write_files:
       Cmnd_Alias AGENT_KILL = /usr/bin/pkill -9 -f agentd*
       agent ALL=(root) NOPASSWD: AGENT_UNITS, AGENT_DIAG, AGENT_KILL
 
-      # O binario mora em /usr/local/bin, do ROOT, e nao em /workspace.
+      # NAO EXISTE concessao de `agent` para `agentd` aqui, e a ausencia e
+      # deliberada.
       #
-      # Custou uma escalada completa descobrir: com o binario em /workspace, dono
-      # `agent`, o modelo o SUBSTITUIRIA e a regra abaixo o rodaria como agentd.
-      # Quem escreve o binario do servico e dono do servico. O preco e que
-      # `update` reconstroi o disco do sistema e leva o binario junto -- entao
-      # todo update pede `task deploy` depois. E o preco certo.
+      # Tentei dar ao operador `agent ALL=(agentd) /usr/local/bin/agentd
+      # -catalog *`. Parece inofensivo e nao e: o OPERADOR e o MODELO sao o mesmo
+      # usuario `agent`. Toda regra dada ao operador e dada ao modelo junto -- e
+      # essa desfazia a protecao que impede o modelo de cadastrar conector
+      # apontando para onde quiser.
       #
-      # O operador gerencia catalogo e cofre como agentd, sem virar root e sem
-      # que o MODELO alcance o mesmo caminho: a ferramenta de shell dele ja roda
-      # como agent, e agent nao tem shell de agentd -- so estes dois comandos.
-      Cmnd_Alias AGENT_CATALOG = /usr/local/bin/agentd -catalog *, \\
-          /usr/local/bin/agentd -vault-init*
-      agent ALL=(agentd) NOPASSWD: AGENT_CATALOG
+      # A autoridade do operador passa a ser a CHAVE SSH DE ROOT, que existe so
+      # no Mac e que o modelo nao alcanca por caminho nenhum. Catalogo, cofre e
+      # deploy entram por ali.
 
   # --- Servidor X virtual -----------------------------------------------
   # Resolucao fixa em 1920x1080: o mesmo canvas dos decks do dono, e evita
@@ -550,6 +548,12 @@ runcmd:
   # Efeito colateral aceito: `update` reconstroi o disco do sistema e leva a
   # identidade junto. O cofre precisa ser reprovisionado depois -- e o mesmo
   # passo que ja existia para a chave da xAI, nao um passo novo.
+  # O sudoers e VALIDADO no boot. Sem isto, um erro de sintaxe no drop-in faz o
+  # sudo descartar o arquivo inteiro EM SILENCIO -- e o efeito nao e "a regra
+  # nova nao vale", e sim "o agent perde todo o sudo", inclusive o da operacao.
+  # Medido: uma continuacao de linha escrita com duas barras derrubou tudo, e o
+  # sintoma foi "a password is required" num comando que nada tinha a ver.
+  - [ bash, -c, "visudo -c -f /etc/sudoers.d/agent-computer || { echo SUDOERS_INVALIDO >&2; rm -f /etc/sudoers.d/agent-computer; exit 1; }" ]
   - [ bash, -c, "install -d -m 0700 -o agentd -g agentd /etc/agentd" ]
   # Senha do cofre gerada NA MAQUINA, nunca transportada. 48 bytes em base64
   # dao ~64 caracteres, bem acima do piso de 24 que o binario exige.
@@ -557,7 +561,19 @@ runcmd:
   # O diretorio de estado passa a ser do agentd, com o grupo agent podendo
   # trabalhar dentro. setgid (2770) faz todo arquivo novo herdar o grupo, senao
   # o que o modelo cria fica ilegivel para o servico -- e vice-versa.
-  - [ bash, -c, "install -d -m 2770 -o agentd -g agent /workspace/agent && usermod -aG agent agentd" ]
+  - [ bash, -c, "install -d -m 2750 -o agentd -g agent /workspace/agent && usermod -aG agent agentd" ]
+  # TODO subdiretorio de estado e do agentd, com o agent apenas LENDO.
+  #
+  # Custou o teste da porta HTTP descobrir: `locks/` ficou do boot anterior como
+  # `agent`, e o agentd -- que agora e outro usuario -- nao conseguia criar nem
+  # abrir trava nenhuma. O supervisor le falha de trava como "tela ocupada",
+  # entao TODA tela ficou permanentemente em 409, com o disco limpo. O sintoma
+  # nao aponta para permissao em lugar nenhum.
+  #
+  # -R porque o volume e preservado no `update`: o que veio da versao anterior
+  # chega com o dono antigo.
+  - [ bash, -c, "install -d -m 2750 -o agentd -g agent /workspace/agent/locks /workspace/agent/status /workspace/agent/conversations /workspace/agent/screenshots" ]
+  - [ bash, -c, "chown -R agentd:agent /workspace/agent/locks /workspace/agent/status /workspace/agent/conversations /workspace/agent/screenshots /workspace/agent/tasks /workspace/agent/events 2>/dev/null; true" ]
   # O cofre em si e 0700 do agentd: pertencer ao grupo da acesso ao TRABALHO,
   # nunca ao segredo. Esta linha e a que separa as duas coisas.
   - [ bash, -c, "install -d -m 0700 -o agentd -g agentd /workspace/agent/vault" ]
@@ -569,6 +585,11 @@ runcmd:
   # 169.254.169.254, o metadata da nuvem. Passam a ser do agentd, com o agent
   # apenas LENDO. Quem instala e o operador, por `sudo -u agentd`.
   - [ bash, -c, "install -d -m 0755 -o agentd -g agentd /workspace/agent/skills /workspace/agent/connectors" ]
+  # -R porque o volume e PRESERVADO no `update`: subdiretorios criados por uma
+  # versao anterior chegam aqui com o dono antigo, e o `install -d` acima so
+  # ajusta o diretorio de cima. O sintoma era o binario recusar a subir com
+  # "chmod ... operation not permitted" -- mensagem que nao aponta para a causa.
+  - [ bash, -c, "chown -R agentd:agentd /workspace/agent/skills /workspace/agent/connectors 2>/dev/null; chmod 0700 /workspace/agent/connectors/secrets 2>/dev/null; true" ]
   # A fila de avisos e o estado das tarefas o servico escreve; o modelo nao tem
   # o que fazer neles, e uma escrita ali forjaria evento e reabriria tela.
   - [ bash, -c, "install -d -m 0750 -o agentd -g agent /workspace/agent/tasks /workspace/agent/events" ]

@@ -137,13 +137,39 @@ echo
 echo "=== 10. o operador AINDA consegue operar ==="
 # Endurecer sem quebrar a operacao: se a lista fechada derrubar os comandos que
 # os scripts usam, a correcao e inutil na pratica.
-for allowed in 'sudo -n systemctl is-active agentd-api' 'sudo -n ufw status' 'sudo -n mount -a'; do
-  if tryAsModel "$allowed"; then
-    ok "permitido, como esperado: $allowed"
-  else
+#
+# ATENCAO: aqui NAO se pode olhar o codigo de saida.
+#
+# Custou um falso positivo descobrir: `systemctl is-active` devolve rc diferente
+# de zero quando a unidade esta parada, e o teste leu isso como "sudo recusou".
+# Ele reportou "a operacao QUEBROU" com a permissao intacta -- e a correcao
+# aponta para o sudoers, que estava certo.
+#
+# O que distingue as duas coisas e a MENSAGEM do sudo, nao o rc: comando negado
+# imprime "not allowed to execute" ou pede senha. Estado do servico nao imprime
+# nenhum dos dois.
+sudoRefused() {
+  local output
+  output="$(agent_ssh "$1" 2>&1)"
+  echo "$output" | grep -qiE 'not allowed to execute|a (terminal|password) is required|Sorry, user'
+}
+for allowed in 'sudo -n systemctl is-active agentd-api' 'sudo -n systemctl daemon-reload' 'sudo -n ufw status' 'sudo -n mount -a'; do
+  if sudoRefused "$allowed"; then
     fail "a operacao QUEBROU: $allowed"
+  else
+    ok "permitido, como esperado: $allowed"
   fi
 done
+
+echo
+echo "=== 11. a lista fechada REPROVA de verdade ==="
+# Prova que a secao 10 nao esta apenas aprovando tudo. Sem este par, um
+# sudoRefused quebrado faria as duas secoes passarem em silencio.
+if sudoRefused 'sudo -n systemctl edit agentd-api'; then
+  ok "recusado, como esperado: systemctl edit (injetaria ExecStart)"
+else
+  fail "PASSOU: systemctl edit — a lista fechada nao esta fechando"
+fi
 
 echo
 echo "erros: $errs"

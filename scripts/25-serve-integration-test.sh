@@ -64,7 +64,10 @@ code="$(agent_ssh "timeout 10s curl -sS -o /dev/null -w '%{http_code}' --max-tim
 
 echo
 echo "=== 5. criar tarefa devolve 201 ==="
-created="$(apiCall POST /tasks '{"prompt":"execute: echo verificacao-ok","screen":2}')"
+# A tarefa precisa DURAR: com `echo`, ela terminava antes do segundo POST e a
+# tela ficava livre -- o teste do conflito recebia 201 e acusava o produto de um
+# defeito que era do proprio teste (uma corrida entre as duas chamadas).
+created="$(apiCall POST /tasks '{"prompt":"execute: sleep 45 && echo verificacao-ok","screen":2}')"
 taskID="$(echo "$created" | grep -oE '"id":"[^"]+"' | head -1 | cut -d'"' -f4)"
 if echo "$created" | grep -q "HTTP:201" && [ -n "$taskID" ]; then
   ok "tarefa criada: $taskID"
@@ -85,7 +88,7 @@ echo
 echo "=== 7. consulta devolve estado e resposta ==="
 if [ -n "${taskID:-}" ]; then
   # Espera a tarefa terminar; o teto evita pendurar se ela travar.
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 30); do
     state="$(apiCall GET "/tasks/$taskID" | grep -oE '"state":"[^"]+"' | cut -d'"' -f4)"
     case "$state" in done|failed|blocked) break ;; esac
     sleep 3
@@ -110,7 +113,15 @@ else
   sleep 2
   # O disco precisa MANTER a tarefa como ativa: e o cadaver que a reconciliacao
   # vai encontrar.
-  onDisk="$(agent_ssh "grep -o '\"State\":\"[^\"]*\"' /workspace/agent/tasks/$reconID.json 2>/dev/null" | cut -d'"' -f4)"
+  # Por ROOT, nao por `agent`: o diretorio de tarefas passou a ser do agentd, e
+  # um `grep` sem permissao devolve vazio -- indistinguivel de "a tarefa sumiu".
+  # Mesma licao do verificador do cofre: quem confere com o usuario RESTRITO nao
+  # consegue separar ausencia de falta de acesso.
+  # O JSON e gravado INDENTADO: `"State": "running"`, com espaco depois dos dois
+  # pontos. Um padrao sem o espaco casa zero e devolve vazio -- que o teste lia
+  # como "a tarefa sumiu do disco". Terceiro defeito seguido do verificador, e
+  # nenhum do produto: quem verifica precisa ser verificado.
+  onDisk="$(root_ssh "grep -oE '\"State\": *\"[^\"]*\"' /workspace/agent/tasks/$reconID.json 2>/dev/null" | cut -d'"' -f4)"
   case "$onDisk" in
     running|pending) ok "apos kill -9 o disco ainda diz '$onDisk' (o cadaver existe)" ;;
     *) fail "esperava running/pending no disco, veio '${onDisk:-nada}'" ;;

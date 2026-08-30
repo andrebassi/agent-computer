@@ -181,7 +181,14 @@ func OpenWith(ctx context.Context, cfg Config) (*Gopass, error) {
 	if err := cfg.apply(); err != nil {
 		return nil, err
 	}
-	return Open(cfg.withPassphrase(ctx))
+	store, err := Open(cfg.withPassphrase(ctx))
+	if err != nil {
+		return nil, err
+	}
+	// O adapter passa a carregar a senha: a decifragem acontece a cada leitura,
+	// não ao abrir, e quem chama Get não tem como saber disso.
+	store.unlock = cfg.withPassphrase
+	return store, nil
 }
 
 // Put grava um segredo no cofre.

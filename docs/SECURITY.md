@@ -33,7 +33,7 @@ Três coisas devem ficar fora do alcance:
 
 ## O que a revisão encontrou
 
-Seis achados. Os dois primeiros tornavam todo o resto decorativo.
+Sete achados. Os dois primeiros tornavam todo o resto decorativo.
 
 ### 1. O modelo era root
 
@@ -122,9 +122,35 @@ modelo. Ele podia editar a habilidade que o instrui e cadastrar um conector
 apontando para onde quisesse — inclusive `169.254.169.254`, o metadata da nuvem.
 
 **Corrigido**: os dois diretórios passaram a ser `agentd:agentd 0755` — o modelo
-lê, não escreve. Quem instala é o operador, por `sudo -u agentd`.
+lê, não escreve. Quem instala é o operador, **por SSH de root** (ver achado 6:
+uma concessão de sudoers aqui valeria para o modelo também).
 
-### 6. Segredo em claro no volume durável
+### 6. Toda regra dada ao operador é dada ao modelo junto
+
+Achado que só apareceu ao verificar na máquina, e é o mais sutil dos seis.
+
+**Operador e modelo são o mesmo usuário `agent`.** O operador entra por SSH como
+`agent`; as ferramentas do modelo são rebaixadas para `agent`. Logo, qualquer
+concessão de sudoers escrita "para o operador" vale para o modelo.
+
+Aconteceu na mesma sessão: para o operador gerenciar o catálogo, escrevi
+
+```
+agent ALL=(agentd) NOPASSWD: /usr/local/bin/agentd -catalog *
+```
+
+Parece inofensivo — e desfazia o achado 5, porque o modelo passava a poder
+cadastrar conector como `agentd`.
+
+**Corrigido**: a concessão saiu. A autoridade do operador passou a ser a **chave
+SSH de root**, que existe só no Mac e que o modelo não alcança por caminho
+nenhum. Catálogo, cofre e deploy entram por ali (`root_ssh` e `agentd_run` em
+`scripts/lib.sh`).
+
+Regra que fica: **enquanto operador e modelo compartilharem usuário, sudoers não
+é lugar para conveniência de operação.**
+
+### 7. Segredo em claro no volume durável
 
 `/workspace/agent/xai.env` era texto puro. O volume é fotografado por `task
 snapshot`, e a foto vai para a conta do DigitalOcean: a chave da xAI ficava
@@ -142,7 +168,7 @@ Registrado, não escondido.
 
 | | Estado |
 |---|---|
-| **`baseURL` de conector sem validação** | um manifesto pode apontar para `169.254.169.254`. Mitigado: só o operador instala conector agora. Não corrigido: falta recusar link-local e faixa privada |
+| **`baseURL` resolvido por NOME** | o IP literal é recusado — link-local (a faixa `169.254.0.0/16` inteira), loopback, faixa privada, CGNAT e esquema fora de http/https. Um NOME que resolve para o metadata ainda passa: validar no cadastro não ajudaria, porque o DNS pode responder outra coisa na hora da chamada. Fechar exige discador que valide o IP na conexão |
 | **Conversa não expira** | a saída de toda ferramenta fica no volume para sempre, e entra em cada foto. Se o modelo leu um segredo em algum momento, ele está gravado ali. Sem expurgo nem redação |
 | **`NoNewPrivileges` desligado no `agentd-api`** | e **de propósito**: o rebaixamento usa `sudo`, que é setuid. Ligar quebraria justamente o mecanismo que tira o cofre do alcance do modelo |
 | **Root na máquina lê tudo** | cofre é cifra em repouso mais separação de usuário, não isolamento contra root. Quem tem a chave SSH de root do Mac contorna tudo — e é assim que o deploy funciona |
@@ -163,13 +189,28 @@ herdaria `CAP_SETUID` e voltaria a ser `agentd`. Piora em vez de melhorar.
 ## Como verificar
 
 ```bash
-task privilege-test    # 10 seções adversariais, rodando como o usuário do modelo
+task privilege-test    # 11 seções adversariais, rodando como o usuário do modelo
+task serve-test        # 10 seções da porta HTTP, incluindo reconciliação após kill -9
 ```
+
+Resultado medido em 30/08/2026, no droplet `159.203.76.114`: **`erros: 0`** nos
+dois.
 
 O teste **tenta a escalada de verdade** e exige que ela falhe. Uma seção que
 passe em silêncio é uma proteção ausente — por isso a seção 10 confere o
-contrário: que a operação continua funcionando. Endurecer quebrando o operador
-não é endurecer, é trocar de problema.
+contrário (a operação continua funcionando) e a 11 confere que a 10 não está
+apenas aprovando tudo. Endurecer quebrando o operador não é endurecer, é trocar
+de problema.
+
+### O verificador também erra — três vezes nesta sessão
+
+Nenhum dos três era defeito do produto, e todos passariam por defeito dele:
+
+| O que o teste dizia | O que era |
+|---|---|
+| "`vault.pass` não existe" | existia; o `test -s` rodava como `agent`, que não lê `/etc/agentd`. **Usuário restrito não distingue "não existe" de "não posso ver"** |
+| "a operação QUEBROU: `systemctl is-active`" | a permissão estava intacta; `is-active` devolve rc≠0 quando a unidade está **parada**. Recusa se reconhece pela MENSAGEM do sudo, não pelo rc |
+| "a tarefa sumiu do disco" | estava lá; o JSON é gravado indentado (`"State": "running"`) e o padrão do `grep` não previa o espaço |
 
 Ele não pode ser substituído por leitura de código: a separação depende de dono
 de arquivo, modo, sudoers e **ordem de diretivas do systemd**, e cada um deles
