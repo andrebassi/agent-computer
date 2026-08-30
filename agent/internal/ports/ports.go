@@ -11,6 +11,20 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 )
 
+// TaskRunner é o porto de ENTRADA: o que o agente oferece a quem o comanda.
+//
+// É o primeiro porto deste lado — até aqui só havia portos de saída, porque a
+// única entrada era a linha de comando, que fala direto com o serviço.
+//
+// Existe para o adaptador de entrada não depender do serviço concreto e, no
+// teste, para o laço inteiro poder ser substituído por um duplo que responde na
+// hora. Sem isto, testar a porta HTTP exigiria rodar o modelo de verdade — e o
+// teste voltaria a custar token.
+type TaskRunner interface {
+	Run(ctx context.Context, task *domain.Task) error
+	Resume(ctx context.Context, task *domain.Task, humanNote string) error
+}
+
 // ToolSpec descreve uma ferramenta para o modelo: nome, para que serve e o
 // esquema JSON dos argumentos.
 type ToolSpec struct {
@@ -109,6 +123,12 @@ type TaskStore interface {
 	// ActiveTaskOnScreen devolve a tarefa que ocupa a tela, ou nil. É a base da
 	// trava de uma tarefa por tela.
 	ActiveTaskOnScreen(ctx context.Context, screen int) (*domain.Task, error)
+	// ListActiveTasks devolve todas as tarefas que ainda ocupam alguma tela.
+	//
+	// É a base da reconciliação no boot: sem enumerar, um processo morto deixa
+	// tarefa presa numa tela e não há como descobrir quais. Uma varredura por
+	// tela não basta — ela só enxerga a primeira de cada uma.
+	ListActiveTasks(ctx context.Context) ([]*domain.Task, error)
 	SaveConversation(ctx context.Context, c *domain.Conversation) error
 	LoadConversation(ctx context.Context, taskID string) (*domain.Conversation, error)
 }

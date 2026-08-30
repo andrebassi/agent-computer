@@ -94,6 +94,7 @@ type fakeStore struct {
 	conversations   map[string]*domain.Conversation
 	saveErr         error
 	conversationErr error
+	listErr         error
 }
 
 // newFakeStore devolve um armazenamento vazio pronto para uso.
@@ -126,6 +127,25 @@ func (f *fakeStore) ActiveTaskOnScreen(_ context.Context, screen int) (*domain.T
 		}
 	}
 	return nil, nil
+}
+
+// ListActiveTasks devolve todas as tarefas que ainda ocupam alguma tela.
+//
+// A ordem é a do mapa, ou seja, aleatória — de propósito. Um teste que dependa
+// da ordem daqui está dependendo de algo que o armazenamento real também não
+// garante, e é melhor que ele falhe de forma intermitente agora do que em
+// produção.
+func (f *fakeStore) ListActiveTasks(context.Context) ([]*domain.Task, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var active []*domain.Task
+	for _, t := range f.tasks {
+		if t.Active() {
+			active = append(active, t)
+		}
+	}
+	return active, nil
 }
 
 // SaveConversation guarda uma CÓPIA do histórico.

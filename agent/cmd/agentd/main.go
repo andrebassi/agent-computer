@@ -297,43 +297,21 @@ func startTask(ctx context.Context, agent *service.Agent, taskStore *store.FileS
 	return runErr
 }
 
-// abandonTask desiste de uma tarefa bloqueada e libera a tela.
+// abandonTask desiste de uma tarefa e libera a tela.
 //
-// Sem isto, uma tarefa que ficou esperando uma pessoa trava a tela para sempre —
-// e como o estado é durável, ela sobrevive a reboot e a rebuild do computador. A
-// única saída seria apagar o arquivo à mão, o que ninguém descobre sozinho.
-//
-// Encontrado no teste integrado: uma tarefa bloqueada no dia anterior impediu
-// todas as tarefas seguintes na tela 1, e o sintoma ("a tela já tem uma tarefa
-// ativa") não sugeria o que fazer.
+// Delega ao Lifecycle do serviço, que é o MESMO código usado pela porta HTTP.
+// Duplicar as regras aqui é como as duas pontas divergem, e a que diverge em
+// silêncio é sempre a que ninguém roda — foi assim que o abandono de tarefa
+// pendente passou a mentir sobre ter liberado a tela.
 func abandonTask(ctx context.Context, taskStore *store.FileStore, screenDriver *screen.XScreen, taskID string) error {
 	if taskID == "" {
 		return errors.New("informe a tarefa com -task")
 	}
-	task, err := taskStore.LoadTask(ctx, taskID)
+	task, err := service.NewLifecycle(taskStore, screenDriver, time.Now).Abandon(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if task == nil {
-		return fmt.Errorf("tarefa %s não encontrada", taskID)
-	}
-	if !task.Active() {
-		return fmt.Errorf("tarefa %s já está encerrada (estado %s)", taskID, task.State)
-	}
-	// Pendente e bloqueada seguem o MESMO caminho, e isso é a correção de um
-	// defeito: antes, pendente só imprimia uma mensagem e o estado ficava
-	// intacto. Como Active() conta pendente, a tela seguia ocupada enquanto o
-	// comando anunciava "tela liberada" — e a próxima tarefa era recusada sem
-	// que ninguém entendesse por quê.
-	if err := task.Fail("abandonada por decisão humana", time.Now()); err != nil {
-		return err
-	}
-	if err := taskStore.SaveTask(ctx, task); err != nil {
-		return err
-	}
-	_ = screenDriver.ClearTakeover(ctx, task.Screen)
-	_ = screenDriver.ShowStatus(ctx, task.Screen, task.StatusLine())
-	fmt.Printf("tela %d liberada\n", task.Screen)
+	fmt.Printf("tarefa %s abandonada; tela %d liberada\n", task.ID, task.Screen)
 	return nil
 }
 

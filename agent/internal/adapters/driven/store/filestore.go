@@ -59,12 +59,17 @@ func (s *FileStore) LoadTask(_ context.Context, id string) (*domain.Task, error)
 	return &task, nil
 }
 
-// ActiveTaskOnScreen varre as tarefas e devolve a que ocupa a tela.
+// ListActiveTasks devolve todas as tarefas que ainda ocupam alguma tela.
 //
 // Varredura linear é adequada aqui: o diretório guarda dezenas de tarefas, não
 // milhões, e um índice seria mais uma coisa a ficar dessincronizada do estado
 // real depois de um rebuild.
-func (s *FileStore) ActiveTaskOnScreen(ctx context.Context, screen int) (*domain.Task, error) {
+//
+// Enumerar é o que torna a reconciliação possível. Sem isto, um processo morto
+// deixa tarefa presa numa tela e não há como descobrir QUAIS — e uma varredura
+// por tela só enxerga a primeira de cada uma, escondendo a segunda até a
+// primeira sair.
+func (s *FileStore) ListActiveTasks(_ context.Context) ([]*domain.Task, error) {
 	dir := filepath.Join(s.root, "tasks")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -73,6 +78,7 @@ func (s *FileStore) ActiveTaskOnScreen(ctx context.Context, screen int) (*domain
 		}
 		return nil, err
 	}
+	var active []*domain.Task
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -84,8 +90,23 @@ func (s *FileStore) ActiveTaskOnScreen(ctx context.Context, screen int) (*domain
 			// arquivo ruim impedindo qualquer tarefa nova de começar.
 			continue
 		}
-		if task.Screen == screen && task.Active() {
-			return &task, nil
+		if task.Active() {
+			copia := task
+			active = append(active, &copia)
+		}
+	}
+	return active, nil
+}
+
+// ActiveTaskOnScreen devolve a tarefa que ocupa a tela, ou nil.
+func (s *FileStore) ActiveTaskOnScreen(ctx context.Context, screen int) (*domain.Task, error) {
+	active, err := s.ListActiveTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, task := range active {
+		if task.Screen == screen {
+			return task, nil
 		}
 	}
 	return nil, nil
