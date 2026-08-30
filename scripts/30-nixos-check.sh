@@ -98,18 +98,36 @@ fi
 
 echo
 echo "4/4 avaliacao do sistema completo (x86_64-linux)"
-# Os dois stubs substituem o que o nixos-infect gera na maquina de verdade:
-# gerenciador de boot e sistema de arquivos raiz. Sem eles a avaliacao reclama
-# de opcao obrigatoria que ali vem do hardware-configuration.nix.
+# O stub REPLICA o que o nixos-infect gera, e nao apenas o minimo para avaliar.
+#
+# Custou um droplet descobrir a diferenca. O stub antigo tinha so boot e raiz, e
+# aprovou uma configuracao que a maquina recusou:
+#
+#   error: The option `system.stateVersion` has conflicting definition values:
+#   - In `/etc/nixos/host.nix`: "25.11"
+#   - In `/etc/nixos/configuration.nix`: "23.11"
+#
+# O infect fixa 23.11 na config dele. Avaliar o nosso modulo SOZINHO nunca veria
+# o conflito -- ele so existe quando os dois se encontram. Um verificador que
+# nao reproduz o vizinho aprova o que a maquina reprova, que e o pior tipo de
+# verde.
+#
+# Os valores abaixo vem do proprio nixos-infect (funcao makeConf).
 evalOut="$(timeout 900s nix --extra-experimental-features 'nix-command flakes' \
   eval --impure --raw --expr "
 let
   nixpkgs = builtins.fetchTarball \"https://github.com/NixOS/nixpkgs/archive/${nixpkgsChannel}.tar.gz\";
   system = import \"\${nixpkgs}/nixos/lib/eval-config.nix\" {
     system = \"x86_64-linux\";
-    modules = [ ./nixos/host.nix ({ ... }: {
+    modules = [ ./nixos/host.nix ({ modulesPath, ... }: {
       boot.loader.grub.device = \"/dev/vda\";
       fileSystems.\"/\" = { device = \"/dev/vda1\"; fsType = \"ext4\"; };
+      # O que o nixos-infect escreve em configuration.nix:
+      system.stateVersion = \"23.11\";
+      services.openssh.enable = true;
+      users.users.root.openssh.authorizedKeys.keys = [ \"ssh-rsa STUB\" ];
+      networking.hostName = \"agent-computer\";
+      boot.loader.grub.efiSupport = false;
     }) ];
   };
 in \"drvPath: \${system.config.system.build.toplevel.drvPath}\"

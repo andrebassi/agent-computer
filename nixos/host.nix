@@ -551,5 +551,15 @@ in
 
   # Versao do estado. NAO acompanha a versao do NixOS: mudar isto sem ler as
   # notas de migracao e como a maioria dos danos silenciosos acontece.
-  system.stateVersion = "25.11";
+  #
+  # `mkForce` porque o nixos-infect fixa "23.11" na configuration.nix que ele
+  # gera, e duas definicoes de mesma prioridade nao se resolvem sozinhas -- a
+  # construcao PARA com "conflicting definition values". Custou uma conversao
+  # inteira descobrir; o verificador local passou a replicar o valor dele
+  # justamente para o conflito aparecer aqui.
+  #
+  # 25.11 e o valor correto: esta maquina nasce agora, nao foi migrada de uma
+  # instalacao antiga. E o estado que importa nao mora no disco do sistema de
+  # qualquer forma -- ele esta no volume.
+  system.stateVersion = lib.mkForce "25.11";
 }
