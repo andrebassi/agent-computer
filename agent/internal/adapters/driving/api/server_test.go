@@ -72,7 +72,7 @@ func TestCreateTaskReturns201(t *testing.T) {
 // Sem token, ou com token errado, é 401 — e o formato do cabeçalho não importa.
 func TestAuthenticationRejectsBadTokens(t *testing.T) {
 	handler, _, _ := newServer(t, &fakeRunner{})
-	casos := []struct {
+	cases := []struct {
 		nome      string
 		cabecalho string
 	}{
@@ -81,7 +81,7 @@ func TestAuthenticationRejectsBadTokens(t *testing.T) {
 		{"esquema errado", "Basic " + testToken},
 		{"token vazio", "Bearer "},
 	}
-	for _, c := range casos {
+	for _, c := range cases {
 		t.Run(c.nome, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"prompt":"x"}`))
 			if c.cabecalho != "" {
@@ -121,16 +121,16 @@ func TestBusyScreenReturns409WithHint(t *testing.T) {
 	runner := &fakeRunner{release: make(chan struct{})}
 	handler, _, _ := newServer(t, runner)
 
-	primeira := do(t, handler, http.MethodPost, "/tasks", `{"prompt":"primeira","screen":1}`)
-	if primeira.Code != http.StatusCreated {
-		t.Fatalf("preparação falhou: %d", primeira.Code)
+	firstResponse := do(t, handler, http.MethodPost, "/tasks", `{"prompt":"primeira","screen":1}`)
+	if firstResponse.Code != http.StatusCreated {
+		t.Fatalf("preparação falhou: %d", firstResponse.Code)
 	}
-	segunda := do(t, handler, http.MethodPost, "/tasks", `{"prompt":"segunda","screen":1}`)
-	if segunda.Code != http.StatusConflict {
-		t.Fatalf("esperava 409, veio %d", segunda.Code)
+	secondResponse := do(t, handler, http.MethodPost, "/tasks", `{"prompt":"segunda","screen":1}`)
+	if secondResponse.Code != http.StatusConflict {
+		t.Fatalf("esperava 409, veio %d", secondResponse.Code)
 	}
-	body := decode(t, segunda)
-	if body["task_id"] != decode(t, primeira)["id"] {
+	body := decode(t, secondResponse)
+	if body["task_id"] != decode(t, firstResponse)["id"] {
 		t.Fatalf("devia nomear a tarefa que segura a tela: %v", body)
 	}
 	if dica, _ := body["hint"].(string); !strings.Contains(dica, "resume") || !strings.Contains(dica, "abandon") {
@@ -142,12 +142,12 @@ func TestBusyScreenReturns409WithHint(t *testing.T) {
 // Pedido malformado é 400, não 500 — a culpa é de quem chamou.
 func TestBadRequestsReturn400(t *testing.T) {
 	handler, _, _ := newServer(t, &fakeRunner{})
-	casos := map[string]string{
+	cases := map[string]string{
 		"json quebrado": `{quebrado`,
 		"prompt vazio":  `{"prompt":"","screen":1}`,
 		"tela inválida": `{"prompt":"x","screen":99}`,
 	}
-	for nome, corpo := range casos {
+	for nome, corpo := range cases {
 		t.Run(nome, func(t *testing.T) {
 			rec := do(t, handler, http.MethodPost, "/tasks", corpo)
 			if rec.Code != http.StatusBadRequest {
@@ -160,8 +160,8 @@ func TestBadRequestsReturn400(t *testing.T) {
 // Corpo grande demais é 413, e é recusado ANTES de virar memória do processo.
 func TestOversizedBodyReturns413(t *testing.T) {
 	handler, _, _ := newServer(t, &fakeRunner{})
-	gigante := `{"prompt":"` + strings.Repeat("x", maxBodyBytes+1024) + `"}`
-	rec := do(t, handler, http.MethodPost, "/tasks", gigante)
+	oversized := `{"prompt":"` + strings.Repeat("x", maxBodyBytes+1024) + `"}`
+	rec := do(t, handler, http.MethodPost, "/tasks", oversized)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("esperava 413, veio %d", rec.Code)
 	}

@@ -68,14 +68,19 @@ func main() {
 		catalog      = flag.Bool("catalog", false, "gerencia conectores e habilidades; use -catalog list")
 		notifyDrain  = flag.Bool("notify-drain", false, "entrega os avisos enfileirados e limpa a fila")
 		webhookURL   = flag.String("webhook", "", "destino HTTP dos avisos; sem ele, -notify-drain só lista")
+		serveHTTP    = flag.Bool("serve", false, "sobe a porta HTTP em vez de rodar uma tarefa")
+		listenAddr   = flag.String("listen", "127.0.0.1:8787", "endereço de escuta; use o IP da malha, NUNCA 0.0.0.0")
+		tokenFile    = flag.String("token-file", "", "arquivo do token da API (padrão: <state>/api-token)")
+		taskTimeout  = flag.Duration("task-timeout", 2*time.Hour, "teto de tempo de uma tarefa")
 	)
 	flag.Parse()
 
 	opts := runOptions{
 		screen: *screenNumber, prompt: *prompt, taskID: *taskID, note: *note,
 		stateDir: *stateDir, model: *modelName, webhook: *webhookURL,
+		listen: *listenAddr, tokenFile: *tokenFile, taskTimeout: *taskTimeout,
 		resume: *resume, abandon: *abandon, catalog: *catalog, drain: *notifyDrain,
-		rest: flag.Args(),
+		serve: *serveHTTP, rest: flag.Args(),
 	}
 	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
@@ -92,7 +97,10 @@ type runOptions struct {
 	screen                          int
 	prompt, taskID, note, stateDir  string
 	model, webhook                  string
+	listen, tokenFile               string
+	taskTimeout                     time.Duration
 	resume, abandon, catalog, drain bool
+	serve                           bool
 	rest                            []string
 }
 
@@ -113,6 +121,19 @@ func run(o runOptions) error {
 	// que iniciou a tarefa — e por isso não pede chave de modelo nenhuma.
 	if o.drain {
 		return runDrain(context.Background(), stateDir, o.webhook)
+	}
+
+	// A porta HTTP precisa do modelo, porque as tarefas que ela cria o chamam.
+	if o.serve {
+		d, err := buildDeps(stateDir, modelName, true, false)
+		if err != nil {
+			return err
+		}
+		tokenPath := o.tokenFile
+		if tokenPath == "" {
+			tokenPath = stateDir + "/api-token"
+		}
+		return serve(context.Background(), d, o.listen, tokenPath, o.taskTimeout)
 	}
 
 	// Abandonar é operação local: não chama o modelo nem carrega conectores.

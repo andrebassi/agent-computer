@@ -65,20 +65,20 @@ func TestOnlyKindsWithNoKindsBlocksEverything(t *testing.T) {
 // O spool vem primeiro na composição justamente por isso: se o destino remoto
 // travar, o fato já está em disco e o drenador o entrega depois.
 func TestTeePublishesToAllEvenWhenOneFails(t *testing.T) {
-	primeiro := &recorder{}
-	quebrado := &recorder{err: errors.New("sem rede")}
-	ultimo := &recorder{}
+	first := &recorder{}
+	broken := &recorder{err: errors.New("sem rede")}
+	last := &recorder{}
 
-	sink := Tee(primeiro, quebrado, ultimo)
+	sink := Tee(first, broken, last)
 	err := sink.Publish(context.Background(), domain.TaskEvent{Kind: domain.EventBlocked})
 
 	if err == nil {
 		t.Fatal("o erro devia ser devolvido para registro")
 	}
-	if len(primeiro.got) != 1 {
+	if len(first.got) != 1 {
 		t.Fatal("o destino anterior ao que falhou devia ter recebido")
 	}
-	if len(ultimo.got) != 1 {
+	if len(last.got) != 1 {
 		t.Fatal("o destino POSTERIOR ao que falhou também devia ter recebido")
 	}
 }

@@ -161,9 +161,9 @@ func TestPanicIsContainedAndRecorded(t *testing.T) {
 	waitIdle(t, sup)
 
 	// O próprio teste terminando já prova que o processo sobreviveu.
-	gravada := store.tasks[task.ID]
-	if gravada.State != domain.StateFailed {
-		t.Fatalf("a tarefa devia constar como falha, veio %s", gravada.State)
+	stored := store.tasks[task.ID]
+	if stored.State != domain.StateFailed {
+		t.Fatalf("a tarefa devia constar como falha, veio %s", stored.State)
 	}
 }
 
@@ -201,11 +201,11 @@ func TestRunErrorLandsOnTheTask(t *testing.T) {
 	}
 	waitIdle(t, sup)
 
-	gravada := store.tasks[task.ID]
-	if gravada.State != domain.StateFailed {
-		t.Fatalf("esperava falha, veio %s", gravada.State)
+	stored := store.tasks[task.ID]
+	if stored.State != domain.StateFailed {
+		t.Fatalf("esperava falha, veio %s", stored.State)
 	}
-	if gravada.Failure == "" {
+	if stored.Failure == "" {
 		t.Fatal("o motivo devia estar registrado")
 	}
 }
@@ -240,13 +240,13 @@ func TestShutdownCancelsAndWaits(t *testing.T) {
 // waitIdle espera as tarefas em voo terminarem.
 func waitIdle(t *testing.T, sup *Supervisor) {
 	t.Helper()
-	prazo := time.After(3 * time.Second)
+	deadline := time.After(3 * time.Second)
 	for {
 		if sup.Running() == 0 {
 			return
 		}
 		select {
-		case <-prazo:
+		case <-deadline:
 			t.Fatalf("ainda há %d tarefa(s) em voo", sup.Running())
 		case <-time.After(5 * time.Millisecond):
 		}

@@ -21,13 +21,13 @@ func TestConcurrentStartsOnlyOneWins(t *testing.T) {
 	runner := &fakeRunner{release: make(chan struct{})}
 	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
 
-	const tentativas = 8
+	const attempts = 8
 	var aceitos, recusados atomic.Int32
 	var largada sync.WaitGroup
 	var terminou sync.WaitGroup
 	largada.Add(1)
 
-	for i := 0; i < tentativas; i++ {
+	for i := 0; i < attempts; i++ {
 		terminou.Add(1)
 		go func() {
 			defer terminou.Done()
@@ -48,9 +48,9 @@ func TestConcurrentStartsOnlyOneWins(t *testing.T) {
 	if aceitos.Load() != 1 {
 		t.Fatalf("exatamente uma devia entrar, entraram %d", aceitos.Load())
 	}
-	if recusados.Load() != tentativas-1 {
+	if recusados.Load() != attempts-1 {
 		t.Fatalf("as outras %d deviam ser recusadas por tela ocupada, foram %d",
-			tentativas-1, recusados.Load())
+			attempts-1, recusados.Load())
 	}
 	close(runner.release)
 }
@@ -104,13 +104,13 @@ func TestDifferentScreensRunInParallel(t *testing.T) {
 // e continua reservando a tela até alguém agir.
 func TestStartRefusesWhenDiskHasBlockedTask(t *testing.T) {
 	store := newFakeStore()
-	bloqueada, err := domain.NewTask("t-antiga", 1, "antiga", time.Now())
+	blockedTask, err := domain.NewTask("t-antiga", 1, "antiga", time.Now())
 	if err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	_ = bloqueada.Start(time.Now())
-	_ = bloqueada.Block(domain.BlockCaptcha, "resolva", time.Now())
-	store.tasks[bloqueada.ID] = bloqueada
+	_ = blockedTask.Start(time.Now())
+	_ = blockedTask.Block(domain.BlockCaptcha, "resolva", time.Now())
+	store.tasks[blockedTask.ID] = blockedTask
 
 	sup, _ := newSupervisor(t, &fakeRunner{}, store, &fakeLock{})
 	_, err = sup.Start(context.Background(), 1, "nova")

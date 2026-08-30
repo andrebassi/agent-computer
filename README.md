@@ -31,6 +31,7 @@ Lab — serve para testar o conceito, não para produção.
 | [Auditoria de fidelidade](#auditoria-de-fidelidade-à-documentação) | placar do que existe e do que falta |
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
 | [Avaliação do CloakBrowser](#avaliação-do-cloakbrowser) | por que evasão de anti-bot não entra aqui |
+| [Loop engineering, porta HTTP e proatividade](#loop-engineering-porta-http-e-proatividade) | **4 defeitos de produção corrigidos**, e o porquê de cada decisão |
 | [`examples/`](examples/README.md) | conectores e habilidades prontos |
 
 
@@ -2006,6 +2007,15 @@ agent-status      # telas, estado durável, portas, recursos
 ## o agente
 agentd -screen 1 -prompt "a tarefa"
 agentd -resume -task <id> -note "resolvi o login"
+agentd -abandon -task <id>
+
+## a porta HTTP (outros sistemas chamam por aqui)
+agentd -serve                        # 127.0.0.1:8787, token em <state>/api-token
+agentd -serve -listen 100.x.y.z:8787 # na malha; NUNCA 0.0.0.0
+
+## proatividade (o agente fala primeiro)
+agentd -notify-drain                 # lista os avisos pendentes
+agentd -notify-drain -webhook <url>  # entrega e limpa a fila
 
 ## conectores e habilidades
 agentd -prompt "@gitlab liste as issues do projeto 12345"
@@ -2386,3 +2396,461 @@ solução procurando problema.
 Se o objetivo deixar de ser *agente que trabalha sob supervisão* e passar a ser
 *coleta em escala*. Aí a doutrina muda junto, o take-over deixa de fazer sentido,
 e CloakBrowser passa a ser a escolha certa. Mas aí é outro produto.
+
+---
+
+# Loop engineering, porta HTTP e proatividade
+
+> Trabalho de **30/08/2026**. Esta seção documenta o que mudou, por quê, e —
+> principalmente — **os defeitos que a investigação desenterrou**. Vários eram
+> reais e afetavam quem usava o sistema naquele dia.
+
+## Por que este trabalho existiu
+
+O computador funcionava, mas tinha **uma porta de entrada só** (`agentd -prompt`
+por SSH) e **nunca falava primeiro**. Isso o mantinha como estudo: para virar
+ferramenta, ele precisava de uma entrada que outros sistemas alcançassem e uma
+saída pela qual avisasse sozinho.
+
+A investigação para chegar lá encontrou três defeitos no laço — e o desenho veio
+de três fontes: a decisão do dono, o levantamento de um assistente pessoal
+anterior (PicoClaw, hoje desativado), e a pesquisa do estado da arte.
+
+---
+
+## 1. O vocabulário que faltava: loop × harness
+
+O mercado separou duas coisas que costumavam ser tratadas como uma:
+
+| | **Loop** | **Harness** |
+|---|---|---|
+| desenha | **comportamento** | **ambiente** |
+| inclui | parada, retry, verificação, detecção de não-progresso, circuit breaker | ferramentas, sandbox, permissões, estado, mensagem de erro, observabilidade |
+
+**A regra diagnóstica:** conserta mudando prompt, condição de parada ou retry →
+é loop. Precisa mudar o que o agente **é capaz** de fazer ou ver → é harness.
+
+E a regra de ordem: **agente não supervisionado → harness primeiro**.
+
+O diagnóstico deste projeto, em 30/08:
+
+| Harness | Estado |
+|---|---|
+| ferramentas, sandbox (`/workspace` × `/scratch`), permissões, estado durável, erro legível | ✅ forte |
+| observabilidade | ⚠️ fraca |
+
+| Loop | Estado |
+|---|---|
+| teto de iterações | ✅ |
+| retry | ❌ **nenhum** |
+| detecção de não-progresso | ❌ |
+| circuit breaker | ❌ |
+
+**O harness estava bom; o loop, quase vazio.** É o inverso do que a intuição
+sugeria — e a ordem em que foi construído (harness primeiro) estava certa por
+acidente, porque o agente roda sem supervisão.
+
+---
+
+## 2. Os três defeitos, confirmados no fonte
+
+Nenhum era hipótese. Todos foram verificados lendo o código.
+
+### 2.1 `-abandon` de tarefa pendente mentia
+
+```go
+if task.State == domain.StatePending {
+    fmt.Printf("tarefa %s estava pendente e foi descartada\n", taskID)  // ← só imprime
+} else if err := task.Fail(...)                                        // ← só o else muda o estado
+```
+
+O estado continuava `pending` → `Active()` conta `pending` → `ActiveTaskOnScreen`
+filtra por `Active()` → **a tela seguia ocupada**. E o comando terminava
+imprimindo `tela N liberada`.
+
+**Mentira dupla**, e o sintoma era o pior possível: você abandonava, acreditava,
+tentava de novo e levava *"a tela já tem uma tarefa ativa"* sem entender por quê.
+
+O comentário no código explicava o raciocínio que levou ao erro — *"não há
+transição de falha possível"* — e estava **certo** sobre a máquina de estados:
+`Task.Fail` só aceitava `running` e `blocked`. A saída foi não fazer nada, em vez
+de estender a transição.
+
+### 2.2 Tarefa retomada perdia a resposta final
+
+`Run` gravava a conversa ao concluir, com um comentário de quatro linhas
+explicando que sem isso *"a resposta final do agente nunca chegaria ao disco"*.
+
+`continueLoop` **não gravava**. O comentário existia só na metade que tinha a
+gravação, e o defeito que ele descreve estava vivo na outra.
+
+### 2.3 O turno que pedia take-over se perdia
+
+A conversa é gravada no **início** de cada iteração. O resultado da ferramenta
+que bloqueia é anexado depois disso, e o laço retornava chamando `persist`, que
+grava **só a tarefa**.
+
+O `Resume` recarregava a conversa do disco — sem o pedido de ajuda. **O agente
+voltava do take-over sem saber por que tinha parado**, nem o que a pessoa foi
+resolver.
+
+### A causa comum
+
+`Run` e `continueLoop` eram **o mesmo laço escrito duas vezes**, e já tinham
+divergido. Por isso o passo zero foi unificá-los: sem um laço só, cada melhoria
+seguinte seria escrita duas vezes e as cópias voltariam a divergir.
+
+---
+
+## 3. Não comprimir histórico — o que a pesquisa mudou
+
+O instinto (e o projeto anterior) mandava comprimir o histórico preventivamente.
+**Seria um erro**, e a razão é econômica:
+
+> Com prompt caching, manter tudo é mais barato e lembra melhor. Comprimir
+> reescreve o prefixo cacheado e faz pagar preço cheio para recomputar
+> justamente o que a compressão tentaria economizar.
+
+A xAI dá **75% de desconto** em token de entrada cacheado — US$ 0,50/M contra
+US$ 2,00.
+
+Então a compressão virou **reação, nunca prevenção**: só acontece quando o modelo
+recusa explicitamente a janela, e uma vez só.
+
+### O corolário que quase passou
+
+`toolSpecs` iterava um **mapa**. Em Go, a ordem de iteração de mapa muda a cada
+chamada — então a lista de ferramentas, que vai no prefixo do prompt, **mudava
+entre iterações da mesma tarefa**.
+
+Isso sozinho invalidava o cache. Cada iteração pagava preço cheio por um prompt
+praticamente idêntico ao anterior, e ninguém veria o motivo na fatura.
+
+Três linhas de `sort` resolveram. O canário mostra o defeito com precisão:
+`"ordem mudou na posição 0: zeta vs xray"`.
+
+---
+
+## 4. Retry classificado
+
+Três naturezas de falha, três tratamentos **opostos**:
+
+| Natureza | Evidência | Tratamento |
+|---|---|---|
+| transitória | rede, tempo esgotado, 429, 5xx | repete a mesma chamada, backoff 2s/4s |
+| janela estourada | 400/413 com vocabulário de contexto | encurta o histórico e refaz **uma** vez |
+| permanente | 401, 404, esquema inválido | desiste na primeira |
+
+**Classificação por código HTTP, não por texto.** O projeto de referência usava
+nove `strings.Contains` sobre a mensagem porque o erro chegava achatado em
+string; aqui o adaptador tem `resp.StatusCode` na mão. O corpo só entra como
+evidência no **400**, que é ambíguo por natureza — cabe tanto *"seu JSON está
+errado"* quanto *"seu prompt não cabe"*.
+
+### A precedência importa, e tem teste em tabela
+
+**429 e 5xx são transitórios mesmo quando o corpo menciona contexto.** Um
+servidor sobrecarregado devolve qualquer texto, e tratar isso como janela
+estourada faria o agente descartar histórico por causa de indisponibilidade
+passageira — perde trabalho e não resolve nada.
+
+### Duas decisões sobre a trava da tela
+
+O retry acontece **com a trava na mão**. Daí:
+
+- teto de **3 tentativas** (pior caso ~6 s de tela reservada por uma tarefa parada);
+- backoff **cancelável**: `time.Sleep` puro seguraria a tela até o fim da espera
+  mesmo depois de a tarefa ser cancelada — tela reservada por quem já desistiu.
+
+E cancelamento **não é falha transitória**: se a pessoa apertou Ctrl+C, repetir
+gasta token contra a vontade dela.
+
+---
+
+## 5. Proatividade: o agente fala primeiro
+
+### O requisito duro, e de onde veio
+
+No PicoClaw, o transporte de saída disputava a mesma conexão do de entrada (uma
+conexão por dispositivo). Para o agendador conseguir avisar, ele **derrubava o
+serviço**:
+
+```bash
+systemctl stop picoclaw
+sleep 2
+wa-send -to "$RECIPIENT" -text "$FINAL"
+sleep 1
+systemctl start picoclaw
+```
+
+A cada 30 minutos, das 6h às 22h. Isso é ~3 s de indisponibilidade por
+notificação.
+
+**Requisito derivado:** o canal de saída **não pode depender da conexão de
+entrada**.
+
+### A solução: spool + drenador
+
+```
+tarefa para  ──▶  Publish()  ──▶  events.jsonl   (escrita local, retorna)
+                                       │
+                        agentd -notify-drain     (processo separado, por timer)
+                                       │
+                                    webhook
+```
+
+`Publish` **grava e retorna** — não envia nada. Quem entrega é outro processo.
+O requisito fica atendido **por construção**, não por disciplina: matar a sessão
+SSH que iniciou a tarefa não mata a entrega, porque a entrega nunca esteve nela.
+
+E há um segundo motivo: um webhook lento dentro da tarefa **seguraria a trava da
+tela** enquanto o destino pensa.
+
+### Avisar é efeito colateral
+
+`publish` **não devolve erro**, e esse é o contrato. Um destino fora do ar não
+pode transformar tarefa concluída em tarefa falhada — o trabalho foi feito e o
+disco já registrou.
+
+Mas a falha não é engolida: vira **nota de sistema no histórico**. Engolir faria
+quem lê a conversa concluir que nunca houve o que avisar.
+
+### Decisões pequenas com motivo
+
+| Decisão | Por quê |
+|---|---|
+| `O_APPEND`, uma linha por evento | dois agentes em telas diferentes se sobrescreveriam, e o desaparecido seria o de quem escreveu primeiro — a tarefa que espera há mais tempo |
+| linha corrompida é **pulada** | uma queda no meio de uma escrita não pode impedir a entrega de todos os outros avisos |
+| `Clear` **trunca**, não apaga | preserva permissão e o descritor de quem já o tem aberto |
+| fila só é limpa se **tudo** foi entregue | limpar após entrega parcial perderia o restante; a consequência aceita é a oposta — aviso repetido incomoda, aviso perdido deixa uma tela travada |
+| só `blocked` e `failed` são enfileirados | avisar de tudo ensina quem recebe a ignorar, inclusive o take-over |
+| sem `-webhook`, o drenador só **lista** | é o primeiro comando de quem desconfia que um aviso sumiu; consumir a fila ali destruiria a evidência |
+
+### Um caminho que avisava ninguém
+
+O teste de falha encontrou uma lacuna real: **erro do modelo encerrava a tarefa
+por um caminho que não passava pelo `settle`**. Ela morria em silêncio — gravava
+o estado e ninguém era avisado, justamente no caso em que alguém precisa saber.
+
+---
+
+## 6. Paralelismo DECLARADO
+
+Paralelizar todas as ferramentas seria o caminho óbvio e **estaria errado**:
+
+- as ferramentas do navegador falam com a **mesma aba** do Chrome;
+- o shell mexe no mesmo `/workspace`;
+- o take-over muda o estado da tela.
+
+Duas ações simultâneas nesses recursos **não falham — fazem a coisa errada, em
+silêncio**. É exatamente o modo de falha que motivou a trava de uma tarefa por
+tela, e paralelizar às cegas o reintroduziria por dentro.
+
+### `ToolSpec.Concurrent`, padrão falso
+
+Quem marca verdadeiro assume três compromissos, escritos no comentário do campo:
+não guardar estado entre chamadas, não tocar em recurso compartilhado, e honrar
+o cancelamento do contexto.
+
+Hoje **só a chamada de API por conector** se qualifica. Como o zero-value é
+seguro, nenhuma ferramenta existente precisou mudar — e todo turno com take-over
+roda exatamente como antes.
+
+### Tudo-ou-nada por turno
+
+Basta uma ferramenta com estado para o turno inteiro rodar em série. Particionar
+em blocos criaria um escalonador com espaço combinatório de testes, e o caso real
+que paga a conta (dois conectores no mesmo turno) já é atendido.
+
+### Ordem do modelo, não de término
+
+O histórico é o que o modelo relê na iteração seguinte. **Ordem que muda a cada
+execução torna a conversa irreprodutível**, e nenhum defeito daí se reproduz duas
+vezes igual.
+
+Cada goroutine escreve só na própria posição do vetor; a conversa e a tarefa são
+mutadas depois, em série, por um consumidor único.
+
+### Bloqueio simultâneo: duas decisões
+
+- **Vence o primeiro na ordem do modelo**, deterministicamente. O segundo recebe
+  uma explicação, em vez do *"pedido recusado"* que a transição inválida
+  produziria — que sugeriria má-formação onde só houve concorrência.
+- **As irmãs nunca são canceladas.** Matar uma que já disparou um POST produziria
+  efeito no mundo **sem registro no histórico** — e o histórico é o que alguém lê
+  para saber o que a máquina fez.
+
+### `-race` no gate
+
+Obrigatório a partir do momento em que o laço tem goroutines. Um gate sem ele
+deixa corrida de dados passar **verde** — e corrida aqui não trava, faz a coisa
+errada calada.
+
+**Ele pagou o próprio custo na primeira execução** — ver §7.3.
+
+---
+
+## 7. A porta HTTP
+
+```
+POST /tasks               201 + Location
+GET  /tasks/{id}          estado + a RESPOSTA da tarefa
+POST /tasks/{id}/resume   202
+POST /tasks/{id}/abandon  200
+GET  /health              200, sem token
+```
+
+Sem dependência de roteador: `net/http` do Go 1.22+ roteia por método e parâmetro
+de caminho. A superfície de terceiros deste projeto é um ativo — são três
+dependências diretas ao todo.
+
+### 7.1 O defeito número um deste tipo de adaptador
+
+O contexto de uma requisição **morre quando o handler retorna**. Se a goroutine
+derivasse dele, a tarefa morreria na primeira chamada ao modelo — com o cliente
+já tendo recebido *"criada com sucesso"* e a tarefa marcada como falha por
+`context canceled`.
+
+Falha **silenciosa** e difícil de atribuir: tudo parece ter funcionado.
+
+Por isso a goroutine deriva do contexto do **processo**. O canário reprova com a
+mensagem exata:
+
+```
+a tarefa herdou o contexto da REQUISIÇÃO e morreu com ela: context canceled
+```
+
+### 7.2 409, nunca fila
+
+Três checagens **sob o mesmo mutex**, porque cada uma enxerga o que as outras não
+veem:
+
+| Fonte | O que só ela pega |
+|---|---|
+| registro em memória | o que **este** processo roda |
+| disco | tarefa bloqueada de um boot anterior, e tarefa criada pelo CLI |
+| trava (sonda) | o CLI rodando **agora** em outro processo, cuja prova de vida não está no disco |
+
+O canário abre uma janela de 1 ms entre checar e registrar, e o teste reprova com
+`"exatamente uma devia entrar, entraram 8"` — oito tarefas na mesma tela,
+disputando o mesmo teclado. Fila esconderia isso; a recusa não.
+
+**A trava é sondada, não segurada.** `flock` é por descritor aberto, e segurá-la
+para entregar ao laço faria o laço travar contra a própria sonda. Sobra uma
+janela de microssegundos cujo desfecho é uma tarefa **falha e visível**, não
+enfileiramento silencioso. Documentado, não escondido.
+
+### 7.3 A corrida de dados que o `-race` encontrou
+
+Na primeira execução do gate com `-race`, ele acusou uma corrida de **produção**:
+
+```
+goroutine da tarefa:  Task.Start()  ── escreve o estado
+handler HTTP:         describe()    ── lê o mesmo Task para a resposta
+```
+
+`Supervisor.Start` devolvia o **ponteiro**, e o handler o serializava enquanto a
+goroutine já o estava mutando. Duas mãos no mesmo objeto, sem sincronização.
+
+O sintoma em produção não seria um erro: seria uma **resposta com o estado meio
+escrito**, de vez em quando, sem nada no log.
+
+E a correção teve uma sutileza: **copiar depois do disparo não resolve** — a
+goroutine já começou. A primeira tentativa fez exatamente isso e o detector
+continuou acusando. A cópia precisa vir **antes** do `spawn`.
+
+### 7.4 Reconciliação no boot
+
+O oráculo é a **trava**: ela morre com o processo, o estado em disco não. Logo,
+tarefa marcada como ativa cuja tela está destravada é cadáver.
+
+Duas decisões que o teste protege:
+
+- **BLOQUEADA NÃO É CADÁVER.** É o estado que a documentação exige quando aparece
+  senha, 2FA ou CAPTCHA, e é durável de propósito: alguém precisa agir.
+  Convertê-la em falha jogaria fora o trabalho e faria o take-over deixar de
+  existir na prática. O que morreu foi o **aviso na tela**, que era um processo —
+  ele é redesenhado, senão a tela parece ociosa enquanto está reservada.
+- **Trava recusada é prova de vida**: há outro processo trabalhando ali, e
+  matá-lo pelo disco destruiria trabalho em curso.
+
+`Reconcile` roda **antes** de a porta aceitar conexão. Com o servidor no ar, ele
+mataria uma tarefa recém-criada que ainda não tomou a trava.
+
+### 7.5 O token falha FECHADO
+
+Recusa arquivo ausente, permissão frouxa (inclusive só para o grupo) e token
+curto. **Uma porta que sobe sem autenticação porque o arquivo sumiu é o pior
+desfecho possível**: tudo funciona, ninguém percebe, e a máquina fica aberta com
+acesso a shell, navegador e credenciais de conta.
+
+As mensagens dizem **como** consertar (`chmod 600`, o script de geração), com
+teste para isso — descobrir o procedimento no meio de um incidente é tarde
+demais.
+
+Detalhes:
+
+- comparação de **tempo constante**: `==` sai no primeiro byte diferente, e a
+  diferença entre "errou no byte 1" e "errou no byte 30" é medível pela rede;
+- `127.0.0.1:8787` por padrão, IP da malha depois — **nunca `0.0.0.0`**;
+- saúde fica **fora** da autenticação: autenticá-la obrigaria o supervisor de
+  processo a carregar o segredo só para provar que a porta responde;
+- corpo limitado a 64 KB: sem teto, uma requisição enorme consome memória do
+  processo que segura as telas, e derrubá-lo não exigiria nem autenticação.
+
+### 7.6 O CLI continua funcionando
+
+`agentd -prompt` não mudou. As duas entradas passaram a usar o **mesmo**
+`Lifecycle` e a **mesma** fábrica de agente — duplicar as regras é como as pontas
+divergem, e a que diverge em silêncio é sempre a que ninguém roda. Foi exatamente
+assim que o abandono de tarefa pendente passou a mentir.
+
+---
+
+## 8. Comandos novos
+
+```bash
+# a porta HTTP
+agentd -serve                          # 127.0.0.1:8787
+agentd -serve -listen 100.x.y.z:8787   # na malha, NUNCA 0.0.0.0
+agentd -serve -token-file <caminho>    # padrão: <state>/api-token
+
+# proatividade
+agentd -notify-drain                   # lista o que está pendente
+agentd -notify-drain -webhook <url>    # entrega e limpa a fila
+```
+
+---
+
+## 9. Números medidos, 30/08/2026
+
+| | |
+|---|---|
+| Cobertura total | **91,1%** (piso 90%) |
+| Domínio | **100%** (exigência 100%) |
+| Detector de corrida | `-race` no gate |
+| Dependências diretas | 3 |
+| Desconto de cache da xAI | 75% (US$ 0,50/M contra 2,00) |
+| Defeitos de produção corrigidos | 4 (3 no laço + 1 corrida de dados) |
+
+---
+
+## 10. O que a sessão ensinou sobre o próprio processo
+
+**O gate cobrou quatro vezes, e nas quatro eu teria deixado passar:**
+
+1. um teste que virou lento (6 s) porque o retry passou a repetir;
+2. o domínio em 99,3% por um ramo defensivo descoberto — exatamente o tipo de
+   linha que alguém remove por parecer código morto;
+3. `LastAnswer` e `AddSystemNote` entrando sem teste próprio;
+4. o total caindo para 89,3% quando o adaptador HTTP entrou sem teste.
+
+**O canário pegou um teste decorativo:** `TestDelegateRejectsEmptyTask` passava
+com a validação removida — a falha vinha do arquivo de credencial ausente, não da
+tarefa vazia. O teste verificava `Failed` sem verificar o **motivo**.
+
+**Um sweep de renomeação vazou duas vezes:** para dentro de comentário
+(`"a taskText MISTA"`) e para dentro de string (`"agente-fakeAgent"`). Em Go,
+variável dentro de aspas não existe — mas comentário de fim de linha existe, e é
+por ele que o vazamento entra. A terceira versão separa código, comentário e
+literal.

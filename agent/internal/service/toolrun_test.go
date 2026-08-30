@@ -31,10 +31,10 @@ func (b *barrierTool) Spec() ports.ToolSpec {
 
 // Execute registra a chegada, espera as irmãs e devolve.
 func (b *barrierTool) Execute(_ context.Context, _ int, _ string) (*ports.ToolResult, error) {
-	atual := b.running.Add(1)
+	current := b.running.Add(1)
 	for {
-		anterior := b.peak.Load()
-		if atual <= anterior || b.peak.CompareAndSwap(anterior, atual) {
+		previous := b.peak.Load()
+		if current <= previous || b.peak.CompareAndSwap(previous, current) {
 			break
 		}
 	}
@@ -58,10 +58,10 @@ func (s *serialTool) Spec() ports.ToolSpec {
 
 // Execute mede quantas rodam ao mesmo tempo.
 func (s *serialTool) Execute(_ context.Context, _ int, _ string) (*ports.ToolResult, error) {
-	atual := s.running.Add(1)
+	current := s.running.Add(1)
 	for {
-		anterior := s.peak.Load()
-		if atual <= anterior || s.peak.CompareAndSwap(anterior, atual) {
+		previous := s.peak.Load()
+		if current <= previous || s.peak.CompareAndSwap(previous, current) {
 			break
 		}
 	}
@@ -89,22 +89,22 @@ func TestConcurrentToolsRunInParallel(t *testing.T) {
 	}
 	agent := newAgent(&fakeModel{}, tools, &fakeScreen{}, newFakeStore(), &fakeLock{})
 
-	pronto := make(chan []toolOutcome)
+	finished := make(chan []toolOutcome)
 	go func() {
-		pronto <- agent.runToolCalls(context.Background(), mustTask(t, "t1", 1), calls)
+		finished <- agent.runToolCalls(context.Background(), mustTask(t, "t1", 1), calls)
 	}()
 
 	// Se a execução for serial, esta espera nunca termina.
-	esperou := make(chan struct{})
-	go func() { arrived.Wait(); close(esperou) }()
+	allArrived := make(chan struct{})
+	go func() { arrived.Wait(); close(allArrived) }()
 	select {
-	case <-esperou:
+	case <-allArrived:
 	case <-time.After(3 * time.Second):
 		t.Fatal("as três não chegaram juntas — a execução foi serial")
 	}
 	close(release)
 
-	outcomes := <-pronto
+	outcomes := <-finished
 	if len(outcomes) != 3 {
 		t.Fatalf("esperava 3 resultados, veio %d", len(outcomes))
 	}

@@ -43,7 +43,7 @@ func TestReadTokenTrimsTrailingNewline(t *testing.T) {
 // possível: tudo funciona, ninguém percebe, e a máquina fica aberta com acesso a
 // shell, navegador e credenciais.
 func TestReadTokenFailsClosed(t *testing.T) {
-	casos := []struct {
+	cases := []struct {
 		nome     string
 		prepara  func(*testing.T) string
 		esperado error
@@ -79,7 +79,7 @@ func TestReadTokenFailsClosed(t *testing.T) {
 			esperado: ErrTokenShort,
 		},
 	}
-	for _, c := range casos {
+	for _, c := range cases {
 		t.Run(c.nome, func(t *testing.T) {
 			_, err := ReadToken(c.prepara(t))
 			if !errors.Is(err, c.esperado) {

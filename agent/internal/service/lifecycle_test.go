@@ -133,19 +133,19 @@ func TestReconcileKeepsBlockedAndRedrawsTheNotice(t *testing.T) {
 // segunda ficaria invisível até a primeira sair.
 func TestReconcileHandlesTwoTasksOnSameScreen(t *testing.T) {
 	store, screen := newFakeStore(), &fakeScreen{}
-	bloqueada := taskInState(t, "t-bloqueada", 2, domain.StateBlocked)
-	orfa := taskInState(t, "t-orfa", 2, domain.StatePending)
-	store.tasks[bloqueada.ID] = bloqueada
-	store.tasks[orfa.ID] = orfa
+	blockedTask := taskInState(t, "t-bloqueada", 2, domain.StateBlocked)
+	orphanTask := taskInState(t, "t-orfa", 2, domain.StatePending)
+	store.tasks[blockedTask.ID] = blockedTask
+	store.tasks[orphanTask.ID] = orphanTask
 
 	if _, err := newLifecycle(store, screen).Reconcile(context.Background(), &fakeLock{}); err != nil {
 		t.Fatalf("Reconcile falhou: %v", err)
 	}
-	if bloqueada.State != domain.StateBlocked {
-		t.Fatalf("a bloqueada devia ficar intacta, veio %s", bloqueada.State)
+	if blockedTask.State != domain.StateBlocked {
+		t.Fatalf("a bloqueada devia ficar intacta, veio %s", blockedTask.State)
 	}
-	if orfa.State != domain.StateFailed {
-		t.Fatalf("a órfã devia ser encerrada, veio %s", orfa.State)
+	if orphanTask.State != domain.StateFailed {
+		t.Fatalf("a órfã devia ser encerrada, veio %s", orphanTask.State)
 	}
 }
 
@@ -189,12 +189,12 @@ func TestAbandonDistinguishesNotFoundFromFinished(t *testing.T) {
 		t.Fatalf("esperava ErrTaskNotFound, veio %v", err)
 	}
 
-	encerrada := taskInState(t, "t1", 1, domain.StateRunning)
-	if err := encerrada.Finish(fixedClock()); err != nil {
+	finishedTask := taskInState(t, "t1", 1, domain.StateRunning)
+	if err := finishedTask.Finish(fixedClock()); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	store.tasks[encerrada.ID] = encerrada
-	if _, err := life.Abandon(context.Background(), encerrada.ID); !errors.Is(err, ErrTaskFinished) {
+	store.tasks[finishedTask.ID] = finishedTask
+	if _, err := life.Abandon(context.Background(), finishedTask.ID); !errors.Is(err, ErrTaskFinished) {
 		t.Fatalf("esperava ErrTaskFinished, veio %v", err)
 	}
 }

@@ -159,13 +159,13 @@ func TestBusyErrorMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	msg := (&BusyError{Task: task}).Error()
-	if msg == "" {
+	message := (&BusyError{Task: task}).Error()
+	if message == "" {
 		t.Fatal("a mensagem não pode ser vazia")
 	}
 	for _, esperado := range []string{"t-abc", "3"} {
-		if !strings.Contains(msg, esperado) {
-			t.Fatalf("a mensagem devia conter %q: %q", esperado, msg)
+		if !strings.Contains(message, esperado) {
+			t.Fatalf("a mensagem devia conter %q: %q", esperado, message)
 		}
 	}
 }
