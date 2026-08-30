@@ -127,7 +127,7 @@ fi
 echo
 echo "=== 9. PROATIVIDADE: o aviso sobrevive a queda da sessao ==="
 # A fila e escrita pelo processo do servico, que nao depende da sessao SSH.
-pending="$(agent_ssh "/workspace/agentd -notify-drain -state /workspace/agent 2>&1" | tr -d '\r')"
+pending="$(agent_ssh "/usr/local/bin/agentd -notify-drain -state /workspace/agent 2>&1" | tr -d '\r')"
 if echo "$pending" | grep -qE "aviso\(s\) pendente|nenhum aviso"; then
   ok "drenador responde: $(echo "$pending" | head -1)"
 else

@@ -164,7 +164,7 @@ não deva usar.
 
 ### O agente
 
-Dentro da máquina, `/workspace/agentd`:
+Dentro da máquina, `/usr/local/bin/agentd`:
 
 ```bash
 agentd -screen 1 -prompt "a tarefa"           # roda uma tarefa
@@ -455,7 +455,7 @@ O agente só alcança um serviço externo se houver um conector para ele. Instal
 ```bash
 ## manifesto
 scp examples/connectors/digitalocean.yaml agent@<host>:/tmp/do.yaml
-ssh agent@<host> '/workspace/agentd -catalog install /tmp/do.yaml'
+ssh agent@<host> '/usr/local/bin/agentd -catalog install /tmp/do.yaml'
 
 ## credencial, pelo stdin — NUNCA em linha de comando, onde `ps` a exporia
 ssh agent@<host> 'install -m 600 /dev/stdin /workspace/agent/connectors/secrets/digitalocean-token' \
@@ -465,7 +465,7 @@ ssh agent@<host> 'install -m 600 /dev/stdin /workspace/agent/connectors/secrets/
 Conferindo:
 
 ```bash
-ssh agent@<host> '/workspace/agentd -catalog list'
+ssh agent@<host> '/usr/local/bin/agentd -catalog list'
 ```
 
 ```
@@ -503,7 +503,7 @@ teclado e o mouse a qualquer momento.
 
 ```bash
 ssh agent@<host> "XAI_API_KEY='$(pass show bassi/xai/apikey)' \
-  /workspace/agentd -screen 1 -task demo-audit \
+  /usr/local/bin/agentd -screen 1 -task demo-audit \
   -prompt '@digitalocean Faca uma auditoria da conta: liste droplets, volumes e
    snapshots. Calcule o custo mensal somando US\$ 24 por droplet de 4GB,
    US\$ 0,10 por GB de volume e US\$ 0,06 por GB de snapshot. Grave o relatorio

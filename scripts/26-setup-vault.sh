@@ -83,13 +83,13 @@ echo "3/4 gravando no cofre"
     passEntry="${pair#*=}"
     printf '%s=%s\n' "$vaultKey" "$(timeout 25s pass show "$passEntry" | head -1)"
   done
-} | agent_ssh 'sudo -n -u agentd /workspace/agentd -vault-init -state /workspace/agent' 2>&1 | sed 's/^/  /'
+} | agent_ssh 'sudo -n -u agentd /usr/local/bin/agentd -vault-init -state /workspace/agent' 2>&1 | sed 's/^/  /'
 
 echo
 echo "4/4 conferindo pelo EFEITO"
 # O `-catalog list` sobe o binario inteiro sem chamar o modelo nem tocar em tela
 # nenhuma. Se o cofre estiver ilegivel, ele reclama aqui.
-agent_ssh 'sudo -n -u agentd /workspace/agentd -catalog list 2>&1 | head -5' | sed 's/^/  /'
+agent_ssh 'sudo -n -u agentd /usr/local/bin/agentd -catalog list 2>&1 | head -5' | sed 's/^/  /'
 echo
 # A prova que importa: o MODELO nao le a identidade. Roda como `agent`, que e
 # exatamente o usuario para quem as ferramentas dele caem.

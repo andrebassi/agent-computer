@@ -27,6 +27,14 @@ echo
 echo "  Preserva : /workspace, perfil do navegador, sessoes"
 echo "  Descarta : /scratch, pacotes instalados na mao, estado nao commitado"
 echo
+# O binario saiu de /workspace na revisao de seguranca: la ele era do usuario
+# `agent`, e o modelo o substituiria para rodar como `agentd` e abrir o cofre.
+# Em /usr/local/bin ele e do root -- e o disco do sistema e justamente o que este
+# comando reconstroi. Sem o aviso, a maquina volta sem agentd e o sintoma e
+# "porta HTTP nao sobe", que manda procurar no lugar errado.
+echo "  ⚠️  DEPOIS deste comando, rodar: task deploy && task vault"
+echo "      (o binario vive no disco do sistema, que esta sendo reconstruido)"
+echo
 read -r -p "  digitar UPDATE para confirmar: " ok
 [ "$ok" = "UPDATE" ] || { echo "cancelado"; exit 1; }
 

@@ -123,11 +123,19 @@ write_files:
       Cmnd_Alias AGENT_KILL = /usr/bin/pkill -9 -f agentd*
       agent ALL=(root) NOPASSWD: AGENT_UNITS, AGENT_DIAG, AGENT_KILL
 
+      # O binario mora em /usr/local/bin, do ROOT, e nao em /workspace.
+      #
+      # Custou uma escalada completa descobrir: com o binario em /workspace, dono
+      # `agent`, o modelo o SUBSTITUIRIA e a regra abaixo o rodaria como agentd.
+      # Quem escreve o binario do servico e dono do servico. O preco e que
+      # `update` reconstroi o disco do sistema e leva o binario junto -- entao
+      # todo update pede `task deploy` depois. E o preco certo.
+      #
       # O operador gerencia catalogo e cofre como agentd, sem virar root e sem
       # que o MODELO alcance o mesmo caminho: a ferramenta de shell dele ja roda
       # como agent, e agent nao tem shell de agentd -- so estes dois comandos.
-      Cmnd_Alias AGENT_CATALOG = /workspace/agentd -catalog *, \\
-          /workspace/agentd -vault-init*
+      Cmnd_Alias AGENT_CATALOG = /usr/local/bin/agentd -catalog *, \\
+          /usr/local/bin/agentd -vault-init*
       agent ALL=(agentd) NOPASSWD: AGENT_CATALOG
 
   # --- Servidor X virtual -----------------------------------------------
@@ -283,13 +291,35 @@ write_files:
       # 127.0.0.1 de proposito: o acesso e pelo mesmo tunel SSH que ja serve a
       # tela. Escutar em 0.0.0.0 esta a uma regra de firewall mal escrita de
       # estar na internet publica, e o modo de falha e silencioso.
-      ExecStart=/workspace/agentd -serve -listen 127.0.0.1:8787
+      ExecStart=/usr/local/bin/agentd -serve -listen 127.0.0.1:8787
       Restart=on-failure
       RestartSec=10
       # O encerramento limpo cancela as tarefas em voo, elas gravam o estado e
       # soltam a trava. 40s da folga para isso acontecer antes do SIGKILL.
       TimeoutStopSec=40
       KillSignal=SIGTERM
+
+      # --- Isolamento do systemd -----------------------------------------
+      #
+      # Vale em dobro aqui porque as ferramentas do MODELO herdam este namespace:
+      # o que esta fechado para o servico esta fechado para ele tambem.
+      #
+      # /etc e /usr ficam so-leitura. O servico LE /etc/agentd (identidade do
+      # cofre) e nao precisa escrever em lugar nenhum fora do volume.
+      ProtectSystem=strict
+      ReadWritePaths=/workspace /scratch
+      PrivateTmp=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectControlGroups=yes
+      RestrictRealtime=yes
+      LockPersonality=yes
+      #
+      # ATENCAO: NoNewPrivileges e RestrictSUIDSGID ficam DE FORA, e nao por descuido:
+      # o rebaixamento das ferramentas usa `sudo`, que e setuid. Ligar os dois
+      # quebraria justamente o mecanismo que tira o cofre do alcance do modelo --
+      # a protecao maior perderia para a menor. Fica registrado para quem for
+      # endurecer isto depois nao "consertar" o que esta assim de proposito.
 
       [Install]
       WantedBy=multi-user.target
@@ -318,7 +348,7 @@ write_files:
       # escreve -- e era interpolado entre aspas dentro de `sh -c`: um valor
       # fechando a aspa e emendando outro comando seria executado. Sem shell nao
       # ha o que injetar, e o binario le AGENT_WEBHOOK do ambiente ele mesmo.
-      ExecStart=/workspace/agentd -notify-drain
+      ExecStart=/usr/local/bin/agentd -notify-drain
 
   - path: /etc/systemd/system/agentd-notify.timer
     content: |

@@ -42,7 +42,7 @@ Ao final, diga qual foi o stargazers_count que voce leu na pagina."
 # E a saida vai INTEIRA para o log, sem `| tail`: com `set -o pipefail` o `tail`
 # devolveria o proprio codigo de saida, e uma falha do agente sairia como 0 —
 # foi exatamente o que aconteceu na primeira corrida deste script.
-agent_ssh "XAI_API_KEY='$xaiKey' /workspace/agentd -screen 2 -prompt \"$tarefa\"" 2>&1
+agent_ssh "XAI_API_KEY='$xaiKey' /usr/local/bin/agentd -screen 2 -prompt \"$tarefa\"" 2>&1
 
 echo
 echo "=== 3/4 verificando pelo EFEITO: o teste roda? ==="

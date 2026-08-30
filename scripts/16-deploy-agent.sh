@@ -1,10 +1,15 @@
 #!/bin/bash
-# Compila o agentd para o droplet e o instala em /workspace.
+# Compila o agentd e o instala em /usr/local/bin do droplet, como root.
 #
-# Vai em /workspace, e nao em /usr/local/bin, de proposito: o binario e estado
-# duravel. Um `update` destroi o droplet inteiro e remonta so o volume — se o
-# binario morasse no disco do sistema, toda reconstrucao exigiria um deploy
-# novo antes de a maquina voltar a servir para alguma coisa.
+# ⚠️ MUDOU DE LUGAR. Morava em /workspace, tratado como estado duravel para
+# sobreviver ao `update`. A revisao de seguranca mostrou o custo dessa
+# conveniencia: /workspace e do usuario `agent`, e e como `agent` que rodam as
+# ferramentas do MODELO. Ele substituiria o binario do servico -- que roda como
+# `agentd`, dono do cofre. Quem escreve o binario e dono do servico.
+#
+# Agora e root:root 0755 no disco do sistema, e a escrita so acontece por SSH de
+# root, cuja chave existe apenas no Mac. Em troca, `update` leva o binario junto
+# e pede `task deploy` depois.
 #
 # O gate de cobertura roda ANTES do envio. Um binario que sobe sem teste passar
 # e o jeito mais rapido de descobrir na producao o que o `go test` diria em
@@ -22,7 +27,7 @@ agentDir="$repoRoot/agent"
 # o build falha por motivo que nao tem nada a ver com o codigo.
 export GOWORK=off
 
-echo "1/5 gate de cobertura"
+echo "1/7 gate de cobertura"
 "$agentDir/scripts/coverage-gate.sh" >/tmp/agent-deploy-cover.log 2>&1 || {
   echo "🛑 o gate reprovou — o binario NAO sobe:"
   tail -20 /tmp/agent-deploy-cover.log
@@ -35,7 +40,7 @@ tail -3 /tmp/agent-deploy-cover.log | sed 's/^/  /'
 # errada falha com "cannot execute binary file" — mensagem que nao aponta para
 # a causa.
 echo
-echo "2/5 descobrindo a arquitetura do destino"
+echo "2/7 descobrindo a arquitetura do destino"
 remoteArch="$(agent_ssh 'uname -m' 2>/dev/null | tr -d '\r')"
 case "$remoteArch" in
   x86_64)  goArch="amd64" ;;
@@ -45,26 +50,54 @@ esac
 echo "  $remoteArch -> GOARCH=$goArch"
 
 echo
-echo "3/5 compilando"
+echo "3/7 compilando"
 binPath="/tmp/agentd-linux-$goArch"
 (cd "$agentDir" && GOOS=linux GOARCH="$goArch" CGO_ENABLED=0 \
   go build -trimpath -o "$binPath" ./cmd/agentd)
 ls -la "$binPath" | sed 's/^/  /'
 
 echo
-echo "4/5 enviando"
+echo "4/7 enviando"
+#
+# ⚠️ VAI POR SSH DE ROOT, e o destino e /usr/local/bin -- nao /workspace.
+#
+# Custou uma escalada completa descobrir por que: com o binario em /workspace,
+# dono `agent`, o MODELO o substituiria. Como a regra de sudoers permite ao
+# operador rodar esse caminho como `agentd`, e como o proprio servico executa
+# esse arquivo, quem escreve o binario e dono do servico -- e do cofre junto.
+#
+# Enviar como `agent` e depois mover com sudo nao resolveria: o conteudo ainda
+# teria vindo de um arquivo que o modelo controla. A escrita precisa acontecer
+# por um caminho que ele nao alcanca, e a chave de root so existe no Mac.
+#
+# Preco: `update` reconstroi o disco do sistema e leva o binario junto, entao
+# todo update pede um deploy depois. E o preco certo.
+#
 # O envio vai para um nome temporario e so depois troca de lugar: um scp que
-# morre no meio deixaria /workspace/agentd truncado e inutilizavel, e a proxima
-# tarefa falharia com "exec format error" em vez de "arquivo velho".
+# morre no meio deixaria o binario truncado, e a proxima tarefa falharia com
+# "exec format error" em vez de "arquivo velho".
 host="$(agent_host)"
 timeout 180s scp -i "$SSH_KEY_FILE" \
   -o StrictHostKeyChecking=accept-new \
   -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-  "$binPath" "agent@${host}:/workspace/.agentd-novo"
-agent_ssh 'chmod +x /workspace/.agentd-novo && mv /workspace/.agentd-novo /workspace/agentd'
+  "$binPath" "root@${host}:/root/.agentd-novo"
+timeout 60s ssh -i "$SSH_KEY_FILE" \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+  "root@${host}" 'install -o root -g root -m 0755 /root/.agentd-novo /usr/local/bin/agentd && rm -f /root/.agentd-novo'
 
 echo
-echo "5/6 reiniciando a porta HTTP, se ela estiver no ar"
+echo "4b/7 conferindo que o modelo NAO escreve o binario do servico"
+# Prova por comportamento, nao por leitura da permissao: o usuario para quem as
+# ferramentas do modelo caem tenta escrever, e precisa levar "permission denied".
+if agent_ssh 'test -w /usr/local/bin/agentd' 2>/dev/null; then
+  echo "  🛑 o usuario agent ESCREVE o binario — a separacao nao esta de pe"
+  exit 1
+fi
+agent_ssh 'stat -c "  %n: %U:%G %a" /usr/local/bin/agentd'
+
+echo
+echo "5/7 reiniciando a porta HTTP, se ela estiver no ar"
 # Sem isto, o binario novo fica no disco e o SERVICO CONTINUA RODANDO O VELHO —
 # o deploy reporta sucesso e nada muda no comportamento, que e o modo de falha
 # mais confuso possivel: o codigo esta certo, o teste passa, e a maquina insiste
@@ -81,9 +114,9 @@ else
 fi
 
 echo
-echo "6/6 conferindo pelo EFEITO, nao pelo codigo de saida"
+echo "6/7 conferindo pelo EFEITO, nao pelo codigo de saida"
 # `-catalog list` roda sem chave de API e sem tocar em tela nenhuma: e a prova
 # mais barata de que o binario executa naquela maquina.
-agent_ssh '/workspace/agentd -catalog list 2>&1 | head -20' | sed 's/^/  /'
+agent_ssh '/usr/local/bin/agentd -catalog list 2>&1 | head -20' | sed 's/^/  /'
 echo
 echo "rota: $(agent_route)"

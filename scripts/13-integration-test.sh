@@ -26,7 +26,7 @@ XAI_KEY="$(timeout 25s pass show bassi/xai/apikey 2>/dev/null | head -1)"
 # agentd roda com a chave no AMBIENTE, nunca em linha de comando: `ps` exporia
 # o valor a qualquer processo da maquina.
 run_agent() {
-  agent_ssh "XAI_API_KEY='$XAI_KEY' /workspace/agentd $*"
+  agent_ssh "XAI_API_KEY='$XAI_KEY' /usr/local/bin/agentd $*"
 }
 
 echo
@@ -45,7 +45,7 @@ for f in glob.glob('/workspace/agent/tasks/*.json'):
 \" 2>/dev/null")"
   if [ -n "$activeTask" ]; then
     echo "  tela $tela ocupada por '$activeTask' — abandonando"
-    agent_ssh "/workspace/agentd -abandon -task '$activeTask'" >/dev/null 2>&1 \
+    agent_ssh "/usr/local/bin/agentd -abandon -task '$activeTask'" >/dev/null 2>&1 \
       && ok "tela $tela liberada" || fail "nao consegui liberar a tela $tela"
   else
     ok "tela $tela livre"

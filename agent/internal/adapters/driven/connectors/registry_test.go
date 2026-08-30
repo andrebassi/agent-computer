@@ -12,6 +12,19 @@ import (
 	"testing"
 )
 
+// localURL troca 127.0.0.1 por localhost na URL do servidor de teste.
+//
+// A validação de base_url recusa IP interno literal — é o bloqueio que fecha o
+// caminho para 169.254.169.254, o metadata da nuvem. `httptest` escuta em
+// 127.0.0.1, então o teste usa o NOME, que passa por desenho (o limite está
+// registrado em docs/SECURITY.md).
+//
+// Trocar isto por uma variável global de "permitir interno" seria pior: um
+// escape hatch em código de produção acaba ligado em produção.
+func localURL(rawURL string) string {
+	return strings.Replace(rawURL, "127.0.0.1", "localhost", 1)
+}
+
 // sampleManifest devolve um manifesto válido para os testes.
 func sampleManifest(name string) Manifest {
 	return Manifest{
@@ -495,7 +508,7 @@ func TestInstallFileValidatesBeforeCopying(t *testing.T) {
 func installForServer(t *testing.T, r *Registry, url string, op ManifestOperation, auth ManifestAuth) {
 	t.Helper()
 	m := Manifest{
-		Name: "teste", Description: "d", BaseURL: url,
+		Name: "teste", Description: "d", BaseURL: localURL(url),
 		Auth: auth, Operations: []ManifestOperation{op},
 	}
 	if err := r.Install(m); err != nil {

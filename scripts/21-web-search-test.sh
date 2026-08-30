@@ -29,7 +29,7 @@ run() {
   local label="$1" question="$2"
   echo
   echo "=== $label ==="
-  agent_ssh "XAI_API_KEY='$xaiKey' /workspace/agentd -screen 2 -prompt \"/web-search $question\"" 2>&1 | tail -12
+  agent_ssh "XAI_API_KEY='$xaiKey' /usr/local/bin/agentd -screen 2 -prompt \"/web-search $question\"" 2>&1 | tail -12
 }
 
 run "1. dolar (espera atalho: Frankfurter)"      "Qual a cotacao do dolar em reais agora? Diga o valor, a fonte e a data da cotacao."

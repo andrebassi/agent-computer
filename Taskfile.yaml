@@ -80,7 +80,7 @@ tasks:
         source ./scripts/lib.sh
         set +e
         load_token
-        agent_ssh '/workspace/agentd -catalog list'
+        agent_ssh '/usr/local/bin/agentd -catalog list'
 
   integration-test:
     desc: Teste integrado na máquina real — 12 seções, do estado durável ao take-over
@@ -100,6 +100,12 @@ tasks:
       - mkdir -p logs
       - ./scripts/26-setup-vault.sh 2>&1 | tee logs/vault.log
       - ./scripts/23-setup-api-token.sh 2>&1 | tee logs/api-token.log
+
+  privilege-test:
+    desc: 'Prova adversarial: o modelo não alcança o cofre, não vira root, não troca o binário'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/27-privilege-test.sh 2>&1 | tee logs/privilege-test.log
 
   serve-test:
     desc: 'Teste da porta HTTP na máquina real: reconciliação após kill -9 e aviso com a sessão morta'

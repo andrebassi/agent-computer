@@ -189,6 +189,13 @@ func loadManifest(path string) (*loadedConnector, error) {
 	if m.BaseURL == "" {
 		return nil, fmt.Errorf("base_url vazio")
 	}
+	// Recusa na LEITURA, e não só na instalação: um manifesto pode ter chegado
+	// ao diretório por outro caminho — cópia manual, restauração de foto, ou
+	// versão anterior deste código. Validar só ao instalar deixaria o já
+	// instalado passar para sempre.
+	if err := validateBaseURL(m.BaseURL); err != nil {
+		return nil, err
+	}
 	ops := make([]domain.ConnectorOperation, 0, len(m.Operations))
 	for _, op := range m.Operations {
 		schema := defaultedSchema(op.Schema)
@@ -263,6 +270,9 @@ func (r *Registry) Install(m Manifest) error {
 	if m.BaseURL == "" {
 		return fmt.Errorf("base_url é obrigatório")
 	}
+	if err := validateBaseURL(m.BaseURL); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -298,6 +308,9 @@ func (r *Registry) InstallFile(path string) error {
 	}
 	if m.BaseURL == "" {
 		return fmt.Errorf("base_url é obrigatório")
+	}
+	if err := validateBaseURL(m.BaseURL); err != nil {
+		return err
 	}
 	// Um conector já instalado noutro formato precisa sair, senão os dois
 	// arquivos coexistem e o vencedor depende da ordem de leitura do diretório.
