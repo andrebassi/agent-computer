@@ -1,0 +1,74 @@
+# Conector do GitLab.
+#
+# YAML existe aqui pelo motivo que este arquivo demonstra: comentário. Um
+# manifesto escrito à mão precisa explicar o escopo do token, o limite de
+# página e o porquê de cada operação — e nada disso cabe em JSON.
+#
+# Instalar:
+#   agentd -connector-install examples/connectors/gitlab.yaml
+#   agentd -connector-secret gitlab-token   # pede o valor sem ecoar
+#
+# Usar, anexando com "@":
+#   agentd -prompt "@gitlab liste as issues abertas do projeto 12345"
+
+name: gitlab
+description: >-
+  Trabalha com issues e merge requests do GitLab pela API, em vez de clicar
+  pelo site. Prefira este conector ao navegador para qualquer coisa que a API
+  exponha: não depende de layout nem de sessão viva.
+
+base_url: https://gitlab.com/api/v4
+
+auth:
+  # O token precisa do escopo "api". Um token só de leitura (read_api) faz
+  # list_issues funcionar e create_issue devolver 403 — que é confuso, porque
+  # o conector parece meio quebrado em vez de mal configurado.
+  type: header
+  header_name: PRIVATE-TOKEN
+  secret_ref: gitlab-token
+
+operations:
+  - name: list_issues
+    description: >-
+      Lista issues de um projeto. O id do projeto é numérico, ou o caminho
+      completo com barras escapadas (grupo%2Fprojeto).
+    method: GET
+    path: /projects/{id}/issues
+    schema:
+      type: object
+      properties:
+        id:
+          type: string
+          description: ID numérico do projeto, ou caminho com %2F no lugar da barra
+        state:
+          type: string
+          enum: [opened, closed, all]
+        # A API do GitLab limita per_page a 100 e ignora valores maiores em
+        # silêncio — pedir 500 devolve 20 e parece que o filtro não funcionou.
+        per_page:
+          type: integer
+          description: Quantas por página, máximo 100
+      required: [id]
+
+  - name: create_issue
+    description: Abre uma issue nova num projeto.
+    method: POST
+    path: /projects/{id}/issues
+    # Estes vão no corpo; o resto iria na query string, onde valores acabam
+    # gravados em log de servidor.
+    body_params: [title, description, labels]
+    schema:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+          description: Título da issue
+        description:
+          type: string
+          description: Corpo em Markdown
+        labels:
+          type: string
+          description: Rótulos separados por vírgula
+      required: [id, title]

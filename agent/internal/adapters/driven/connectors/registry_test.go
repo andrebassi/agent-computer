@@ -213,6 +213,216 @@ func TestSecretPathCannotEscapeDirectory(t *testing.T) {
 	}
 }
 
+// yamlManifest é o mesmo conector do sampleManifest, escrito em YAML e com
+// comentários — que é justamente o que o formato acrescenta.
+const yamlManifest = `# Conector de teste em YAML
+name: yamlzinho
+description: conector escrito à mão
+base_url: https://api.exemplo.com
+auth:
+  type: header
+  header_name: X-Token
+  secret_ref: yaml-token
+operations:
+  - name: list_items
+    description: lista itens
+    method: GET
+    path: /items/{id}
+    schema:
+      type: object
+      properties:
+        id:
+          type: string
+      required: [id]
+`
+
+// O catálogo aceita YAML além de JSON. Sem isto, quem escreve manifesto à mão
+// perde o comentário, que é o motivo de escolher YAML.
+func TestRegistryLoadsYAMLManifest(t *testing.T) {
+	r, dir := newRegistry(t)
+	path := filepath.Join(dir, "installed", "yamlzinho.yaml")
+	if err := os.WriteFile(path, []byte(yamlManifest), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.Reload(); err != nil {
+		t.Fatalf("Reload falhou: %v", err)
+	}
+	c, ok := r.Get("yamlzinho")
+	if !ok {
+		t.Fatalf("conector em YAML não foi carregado: %+v", r.Installed())
+	}
+	if len(c.Operations) != 1 || c.Operations[0].Name != "list_items" {
+		t.Fatalf("operações não vieram do YAML: %+v", c.Operations)
+	}
+	// O esquema declarado em YAML precisa chegar ao modelo como JSON válido.
+	tools, _ := r.ToolsFor([]string{"yamlzinho"})
+	if len(tools) != 1 {
+		t.Fatalf("esperava uma ferramenta, veio %d", len(tools))
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(tools[0].Spec().Schema), &parsed); err != nil {
+		t.Fatalf("esquema vindo do YAML não é JSON válido: %v (%q)", err, tools[0].Spec().Schema)
+	}
+	if parsed["type"] != "object" {
+		t.Fatalf("esquema convertido inesperado: %v", parsed)
+	}
+}
+
+// A extensão .yml também vale — metade do mundo escreve assim.
+func TestRegistryAcceptsYmlExtension(t *testing.T) {
+	r, dir := newRegistry(t)
+	path := filepath.Join(dir, "installed", "yamlzinho.yml")
+	if err := os.WriteFile(path, []byte(yamlManifest), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.Reload(); err != nil {
+		t.Fatalf("Reload falhou: %v", err)
+	}
+	if _, ok := r.Get("yamlzinho"); !ok {
+		t.Fatal("extensão .yml devia ser aceita")
+	}
+}
+
+// Arquivo de outra extensão é ignorado, e não tratado como manifesto quebrado:
+// um README no diretório não pode virar aviso a cada arranque.
+func TestRegistryIgnoresUnknownExtensions(t *testing.T) {
+	r, dir := newRegistry(t)
+	if err := os.WriteFile(filepath.Join(dir, "installed", "LEIAME.md"), []byte("# nota"), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.Reload(); err != nil {
+		t.Fatalf("Reload falhou: %v", err)
+	}
+	if len(r.Installed()) != 0 {
+		t.Fatalf("arquivo de outra extensão não devia entrar: %+v", r.Installed())
+	}
+}
+
+// Instalar por arquivo preserva o formato: converter YAML para JSON apagaria
+// os comentários que motivaram escolher YAML.
+func TestInstallFilePreservesYAML(t *testing.T) {
+	r, dir := newRegistry(t)
+	origem := filepath.Join(t.TempDir(), "meu.yaml")
+	if err := os.WriteFile(origem, []byte(yamlManifest), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.InstallFile(origem); err != nil {
+		t.Fatalf("InstallFile falhou: %v", err)
+	}
+	destino := filepath.Join(dir, "installed", "yamlzinho.yaml")
+	data, err := os.ReadFile(destino)
+	if err != nil {
+		t.Fatalf("o manifesto devia ficar em .yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "# Conector de teste em YAML") {
+		t.Fatalf("os comentários deviam sobreviver à instalação: %q", string(data)[:60])
+	}
+}
+
+// Reinstalar noutro formato não pode deixar os dois arquivos no catálogo: o
+// vencedor dependeria da ordem de leitura do diretório.
+func TestInstallFileReplacesOtherFormat(t *testing.T) {
+	r, dir := newRegistry(t)
+	m := sampleManifest("yamlzinho")
+	if err := r.Install(m); err != nil {
+		t.Fatalf("Install falhou: %v", err)
+	}
+	origem := filepath.Join(t.TempDir(), "meu.yaml")
+	if err := os.WriteFile(origem, []byte(yamlManifest), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.InstallFile(origem); err != nil {
+		t.Fatalf("InstallFile falhou: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "installed", "yamlzinho.json")); !os.IsNotExist(err) {
+		t.Fatal("o manifesto JSON antigo devia ter saído")
+	}
+	if len(r.Installed()) != 1 {
+		t.Fatalf("devia haver um conector só: %+v", r.Installed())
+	}
+}
+
+// Formato desconhecido é recusado com mensagem que diz quais valem.
+func TestInstallFileRejectsUnknownFormat(t *testing.T) {
+	r, _ := newRegistry(t)
+	origem := filepath.Join(t.TempDir(), "manifesto.toml")
+	if err := os.WriteFile(origem, []byte("nada"), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	err := r.InstallFile(origem)
+	if err == nil {
+		t.Fatal("formato desconhecido devia ser recusado")
+	}
+	if !strings.Contains(err.Error(), ".yaml") {
+		t.Fatalf("a mensagem devia listar os formatos aceitos: %v", err)
+	}
+}
+
+// YAML malformado precisa dizer que é YAML, e não confundir com erro de JSON.
+func TestDecodeManifestReportsFormatInError(t *testing.T) {
+	if _, err := decodeManifest([]byte("nome:\n  - [quebrado"), ".yaml"); err == nil {
+		t.Fatal("YAML inválido devia produzir erro")
+	} else if !strings.Contains(err.Error(), "YAML") {
+		t.Fatalf("o erro devia dizer que é YAML: %v", err)
+	}
+	if _, err := decodeManifest([]byte("{quebrado"), ".json"); err == nil {
+		t.Fatal("JSON inválido devia produzir erro")
+	} else if !strings.Contains(err.Error(), "JSON") {
+		t.Fatalf("o erro devia dizer que é JSON: %v", err)
+	}
+}
+
+// Os exemplos versionados no repositório precisam carregar de verdade.
+//
+// Exemplo que não é exercitado por teste apodrece: alguém muda o formato do
+// manifesto, o código continua passando, e a primeira pessoa a seguir o exemplo
+// tropeça num erro que ninguém viu. Este teste amarra os dois.
+func TestRepositoryExamplesLoad(t *testing.T) {
+	// Da pasta do pacote até a raiz do projeto.
+	examples := filepath.Join("..", "..", "..", "..", "..", "examples", "connectors")
+	entries, err := os.ReadDir(examples)
+	if err != nil {
+		t.Skipf("exemplos não encontrados em %s: %v", examples, err)
+	}
+
+	r, _ := newRegistry(t)
+	encontrados := 0
+	for _, e := range entries {
+		if e.IsDir() || !manifestExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
+			continue
+		}
+		encontrados++
+		t.Run(e.Name(), func(t *testing.T) {
+			if err := r.InstallFile(filepath.Join(examples, e.Name())); err != nil {
+				t.Fatalf("o exemplo %s não instala: %v", e.Name(), err)
+			}
+		})
+	}
+	if encontrados == 0 {
+		t.Fatal("nenhum exemplo encontrado — o teste não estaria verificando nada")
+	}
+
+	// Cada exemplo precisa produzir ferramentas com esquema que a API aceite.
+	for _, c := range r.Installed() {
+		tools, _ := r.ToolsFor([]string{c.Name})
+		if len(tools) == 0 {
+			t.Fatalf("o exemplo %q não expõe ferramenta nenhuma", c.Name)
+		}
+		for _, tool := range tools {
+			var schema map[string]any
+			if err := json.Unmarshal([]byte(tool.Spec().Schema), &schema); err != nil {
+				t.Fatalf("esquema inválido em %s: %v", tool.Spec().Name, err)
+			}
+			if schema["type"] != "object" {
+				t.Fatalf("esquema de %s devia ser object: %v", tool.Spec().Name, schema["type"])
+			}
+			if tool.Spec().Description == "" {
+				t.Fatalf("%s sem descrição — o modelo não saberia quando usar", tool.Spec().Name)
+			}
+		}
+	}
+}
+
 // installForServer instala um conector apontando para um servidor de teste.
 func installForServer(t *testing.T, r *Registry, url string, op ManifestOperation, auth ManifestAuth) {
 	t.Helper()

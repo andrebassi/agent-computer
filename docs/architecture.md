@@ -338,6 +338,50 @@ pessoa não agiu é exatamente "tentar contornar a verificação".
 |---|---|---|
 | `shell` | executa comando | usa `bash -c`, **não** `-lc` — ver §9.4 |
 | `request_takeover` | pede que uma pessoa assuma | é o que transforma "preciso de ajuda" em estado executável |
+| `<conector>.<operação>` | chama a API de um serviço | só entra quando anexado com `@` — ver §5.4 |
+
+### 5.4 Conectores
+
+Um conector é declarado em **manifesto**, não em código: instalar um serviço novo
+não recompila nada. Os dois formatos são aceitos, e servem a públicos diferentes:
+
+| Formato | Para quem |
+|---|---|
+| `.json` | o que uma ferramenta gera |
+| `.yaml` / `.yml` | o que uma pessoa escreve — aceita comentário |
+
+Exemplos versionados: `examples/connectors/github.json` e
+`examples/connectors/gitlab.yaml`. O segundo mostra o que o YAML acrescenta:
+comentário explicando que o token precisa do escopo `api`, e que `per_page`
+acima de 100 é ignorado em silêncio pela API — coisas que não cabem em JSON e
+que a pessoa seguinte descobriria na marra.
+
+```
+                 texto da tarefa
+                        │
+          "@gitlab liste as issues do projeto 12345"
+                        │
+              ParseTaskRequest (domínio)
+                        │
+        ┌───────────────┴───────────────┐
+   Connectors: [gitlab]          Prompt: "liste as issues
+        │                                 do projeto 12345"
+        ▼                                        │
+   Registry.ToolsFor                             ▼
+        │                                  vai ao modelo
+   gitlab.list_issues                      SEM o marcador
+   gitlab.create_issue
+```
+
+**Só os conectores anexados entram.** A descrição de cada ferramenta vai no
+prompt a cada iteração, então oferecer o catálogo inteiro custaria token em toda
+chamada e daria ao modelo acesso a serviços que a tarefa não pediu.
+
+**A credencial nunca está no manifesto** — só a referência a ela. Manifesto é
+copiado, versionado e compartilhado sem ninguém reparar; e como conectores são
+de conta, o valor ficaria ao alcance de todo agente. O segredo mora em
+`connectors/secrets/`, com permissão `0600`, e é lido do disco a cada chamada em
+vez de ficar em memória de um processo de vida longa.
 
 ---
 
@@ -684,6 +728,8 @@ túnel SSH que **você** abre.
 | `Xvfb` + `x11vnc` + `noVNC` | KasmVNC | KasmVNC daria resolução dinâmica, mas exige `.deb` externo — mais peça para quebrar |
 | Chrome | Chromium | o agente navega em site real; compatibilidade importa mais |
 | `grok-4.6` | `grok-4.5` | mais recente, com chamada de ferramenta medida |
+| manifesto em JSON **e** YAML | só JSON | YAML aceita comentário, e manifesto é escrito à mão: explicar o escopo do token vale mais que economizar uma linha |
+| `sigs.k8s.io/yaml` | `gopkg.in/yaml.v3` | converte YAML em JSON e reusa as tags `json` existentes; a alternativa exigiria duplicar cada tag, e tag duplicada diverge com o tempo |
 | trava de arquivo | registro em banco | `flock` é liberado sozinho se o processo morrer |
 | estado em arquivo JSON | SQLite | precisa sobreviver ao rebuild sem serviço nenhum subir junto |
 | perfil por tela | perfil compartilhado | o Chrome trava o `user-data-dir` — ver §10 |

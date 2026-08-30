@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
 )
@@ -114,7 +116,7 @@ func (r *Registry) Reload() error {
 	}
 	loaded := map[string]*loadedConnector{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+		if e.IsDir() || !manifestExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
 			continue
 		}
 		lc, err := loadManifest(filepath.Join(dir, e.Name()))
@@ -128,15 +130,45 @@ func (r *Registry) Reload() error {
 	return nil
 }
 
-// loadManifest lê e valida um manifesto.
+// manifestExtensions são as extensões aceitas no catálogo.
+//
+// Os dois formatos existem porque servem a públicos diferentes: JSON é o que
+// uma ferramenta gera, e YAML é o que uma pessoa escreve — ele aceita
+// comentário, e manifesto de conector é exatamente o tipo de arquivo onde
+// explicar "esta operação precisa do escopo repo" vale mais que a economia de
+// uma linha.
+var manifestExtensions = map[string]bool{".json": true, ".yaml": true, ".yml": true}
+
+// decodeManifest lê um manifesto em JSON ou YAML.
+//
+// A biblioteca de YAML usada converte para JSON antes de decodificar, então as
+// mesmas tags `json` dos structs valem para os dois formatos. A alternativa
+// seria um parser YAML nativo, que exigiria duplicar cada tag — e tag duplicada
+// diverge com o tempo, criando um campo que funciona num formato e não no outro.
+func decodeManifest(data []byte, ext string) (Manifest, error) {
+	var m Manifest
+	switch ext {
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(data, &m); err != nil {
+			return m, fmt.Errorf("YAML inválido: %w", err)
+		}
+	default:
+		if err := json.Unmarshal(data, &m); err != nil {
+			return m, fmt.Errorf("JSON inválido: %w", err)
+		}
+	}
+	return m, nil
+}
+
+// loadManifest lê e valida um manifesto, em qualquer formato aceito.
 func loadManifest(path string) (*loadedConnector, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var m Manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("JSON inválido: %w", err)
+	m, err := decodeManifest(data, strings.ToLower(filepath.Ext(path)))
+	if err != nil {
+		return nil, err
 	}
 	if m.BaseURL == "" {
 		return nil, fmt.Errorf("base_url vazio")
@@ -226,18 +258,68 @@ func (r *Registry) Install(m Manifest) error {
 	return r.Reload()
 }
 
+// InstallFile instala a partir de um arquivo, PRESERVANDO o formato original.
+//
+// É o caminho de quem escreveu um manifesto YAML à mão: converter para JSON na
+// instalação apagaria justamente os comentários que motivaram escolher YAML.
+func (r *Registry) InstallFile(path string) error {
+	ext := strings.ToLower(filepath.Ext(path))
+	if !manifestExtensions[ext] {
+		return fmt.Errorf("formato não reconhecido: %q (use .json, .yaml ou .yml)", ext)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	m, err := decodeManifest(data, ext)
+	if err != nil {
+		return err
+	}
+	// Valida ANTES de copiar: um manifesto quebrado no catálogo vira um aviso
+	// no arranque de toda tarefa, e ninguém liga para aviso repetido.
+	if _, err := domain.NewConnector(m.Name, m.Description, toDomainOps(m.Operations), m.Auth.SecretRef); err != nil {
+		return err
+	}
+	if m.BaseURL == "" {
+		return fmt.Errorf("base_url é obrigatório")
+	}
+	// Um conector já instalado noutro formato precisa sair, senão os dois
+	// arquivos coexistem e o vencedor depende da ordem de leitura do diretório.
+	_, _ = r.removeManifestFiles(m.Name)
+	dest := filepath.Join(r.root, "installed", m.Name+ext)
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return err
+	}
+	return r.Reload()
+}
+
 // Remove tira um conector do catálogo. A credencial NÃO é apagada junto: ela
 // pode ser compartilhada com outro conector, e apagá-la em cascata quebraria o
 // outro sem aviso.
 func (r *Registry) Remove(name string) error {
-	path := filepath.Join(r.root, "installed", filepath.Base(name)+".json")
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("conector %q não está instalado", name)
-		}
+	removed, err := r.removeManifestFiles(name)
+	if err != nil {
 		return err
 	}
+	if !removed {
+		return fmt.Errorf("conector %q não está instalado", name)
+	}
 	return r.Reload()
+}
+
+// removeManifestFiles apaga o manifesto do conector em qualquer formato aceito,
+// e diz se algo foi removido.
+func (r *Registry) removeManifestFiles(name string) (bool, error) {
+	found := false
+	for ext := range manifestExtensions {
+		path := filepath.Join(r.root, "installed", filepath.Base(name)+ext)
+		if err := os.Remove(path); err == nil {
+			found = true
+		} else if !os.IsNotExist(err) {
+			return found, err
+		}
+	}
+	return found, nil
 }
 
 // SetSecret grava a credencial de um conector, só para o dono.
