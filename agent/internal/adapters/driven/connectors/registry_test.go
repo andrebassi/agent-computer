@@ -423,6 +423,74 @@ func TestRepositoryExamplesLoad(t *testing.T) {
 	}
 }
 
+// Diretório de catálogo impossível de criar precisa falhar na construção, e não
+// silenciosamente na primeira instalação.
+func TestNewRegistryFailsOnUnusablePath(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "arquivo")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if _, err := NewRegistry(filepath.Join(file, "catalogo")); err == nil {
+		t.Fatal("caminho inutilizável devia falhar na construção")
+	}
+}
+
+// Diretório de instalados ausente não é erro: é o catálogo vazio de um
+// computador recém-criado.
+func TestReloadHandlesMissingDirectory(t *testing.T) {
+	r, dir := newRegistry(t)
+	if err := os.RemoveAll(filepath.Join(dir, "installed")); err != nil {
+		t.Fatalf("remoção falhou: %v", err)
+	}
+	if err := r.Reload(); err != nil {
+		t.Fatalf("diretório ausente não devia ser erro: %v", err)
+	}
+	if len(r.Installed()) != 0 {
+		t.Fatalf("catálogo devia estar vazio: %+v", r.Installed())
+	}
+}
+
+// Manifesto sem base_url é recusado na leitura, não só na instalação: ele pode
+// chegar ao catálogo por cópia direta de arquivo.
+func TestLoadManifestRejectsMissingBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sem-url.json")
+	if err := os.WriteFile(path, []byte(`{"name":"x","operations":[{"name":"y"}]}`), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if _, err := loadManifest(path); err == nil {
+		t.Fatal("manifesto sem base_url devia ser recusado")
+	}
+}
+
+// Arquivo inexistente precisa produzir erro claro na instalação por caminho.
+func TestInstallFileRejectsMissingFile(t *testing.T) {
+	r, _ := newRegistry(t)
+	if err := r.InstallFile(filepath.Join(t.TempDir(), "nao-existe.yaml")); err == nil {
+		t.Fatal("arquivo inexistente devia produzir erro")
+	}
+}
+
+// Manifesto inválido não pode ser copiado para o catálogo: um arquivo quebrado
+// lá vira aviso no arranque de toda tarefa, e ninguém liga para aviso repetido.
+func TestInstallFileValidatesBeforeCopying(t *testing.T) {
+	r, dir := newRegistry(t)
+	origem := filepath.Join(t.TempDir(), "ruim.yaml")
+	if err := os.WriteFile(origem, []byte("name: ''\nbase_url: https://x\noperations: []\n"), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if err := r.InstallFile(origem); err == nil {
+		t.Fatal("manifesto inválido devia ser recusado")
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "installed"))
+	if err != nil {
+		t.Fatalf("leitura falhou: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("nada devia ter sido copiado: %v", entries)
+	}
+}
+
 // installForServer instala um conector apontando para um servidor de teste.
 func installForServer(t *testing.T, r *Registry, url string, op ManifestOperation, auth ManifestAuth) {
 	t.Helper()

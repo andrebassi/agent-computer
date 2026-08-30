@@ -55,6 +55,20 @@ tasks:
         [ -z "$ip" ] && { echo "droplet nao existe"; exit 1; }
         ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=accept-new "agent@${ip}"
 
+  health:
+    desc: Diagnostica computador inalcançável e diz qual recuperação usar
+    cmds:
+      - ./scripts/14-health.sh 2>&1 | tee logs/health.log
+
+  catalog:
+    desc: 'Lista conectores e habilidades instalados. Uso: task catalog'
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh '/workspace/agentd -catalog list'
+
   integration-test:
     desc: Teste integrado na máquina real — 12 seções, do estado durável ao take-over
     cmds:

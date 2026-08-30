@@ -61,17 +61,24 @@ func main() {
 		note         = flag.String("note", "", "recado à retomada, dizendo o que foi feito")
 		stateDir     = flag.String("state", "/workspace/agent", "diretório de estado durável")
 		modelName    = flag.String("model", "", "modelo da xAI (padrão: grok-4.6)")
+		catalog      = flag.Bool("catalog", false, "gerencia conectores e habilidades; use -catalog list")
 	)
 	flag.Parse()
 
-	if err := run(*screenNumber, *prompt, *taskID, *note, *stateDir, *modelName, *resume, *abandon); err != nil {
+	if err := run(*screenNumber, *prompt, *taskID, *note, *stateDir, *modelName, *resume, *abandon, *catalog, flag.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
 		os.Exit(exitFailure)
 	}
 }
 
 // run monta as dependências concretas e executa a ação pedida.
-func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, resume, abandon bool) error {
+func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, resume, abandon, catalog bool, rest []string) error {
+	// Gerenciar catálogo é operação local, como abandonar: nada de modelo nem
+	// de chave da API.
+	if catalog {
+		return runCatalog(stateDir, rest)
+	}
+
 	// Abandonar é operação local: não chama o modelo nem carrega conectores.
 	// Tratar antes do resto evita exigir a chave da API só para liberar uma tela
 	// — que é justamente o que se quer fazer quando algo deu errado.

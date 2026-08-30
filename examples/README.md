@@ -41,8 +41,8 @@ Procedimentos reutilizáveis, invocados com `/nome`. Instalar é copiar para
 
 | Arquivo | Para quê |
 |---|---|
-| `diagnostico-web.md` | site fora do ar — de fora para dentro, separando DNS de rede de aplicação |
-| `revisao-de-mudanca.md` | conferir o próprio trabalho antes de publicar |
+| `web-diagnosis.md` | site fora do ar — de fora para dentro, separando DNS de rede de aplicação |
+| `change-review.md` | conferir o próprio trabalho antes de publicar |
 
 O limite é 8 KB por habilidade: o conteúdo entra no prompt **a cada iteração**
 da tarefa, não uma vez.
@@ -53,7 +53,7 @@ As duas de exemplo seguem o mesmo formato, e ele não é decorativo:
 
 - **passos numerados com o comando exato**, não descrição do que fazer
 - **o porquê de cada passo**, para o agente saber quando o passo não se aplica
-- **as armadilhas do procedimento** — em `diagnostico-web.md`, não reiniciar
+- **as armadilhas do procedimento** — em `web-diagnosis.md`, não reiniciar
   antes de coletar o log, porque o reinício apaga a prova
 - **uma seção de regras no fim**, com o que vale para o procedimento inteiro
 

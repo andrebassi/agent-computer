@@ -260,10 +260,23 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
 
 ## Pendências
 
-- [ ] Tailscale instalado, **não autenticado** (sem authkey no cofre)
-- [x] ~~Nenhum agente roda~~ — o agente Grok roda e foi validado ponta a ponta em 30/08
-- [ ] Cookies compartilhados entre telas (divergência acima)
-- [ ] Tela de coleta do secret request (o tipo e a garantia já existem)
-- [ ] Detecção de computador inalcançável, para disparar o recover sozinho
-- [ ] Tela de catálogo de conectores
-- [ ] Avaliar KasmVNC para resolução dinâmica
+- [x] ~~Nenhum agente roda~~ — o agente Grok roda, validado ponta a ponta em 30/08
+- [x] ~~Coleta do secret request~~ — `agentd -catalog secret <ref>`, com eco desligado
+- [x] ~~Catálogo de conectores~~ — `agentd -catalog list|install|remove|skill-save`
+- [x] ~~Detecção de computador inalcançável~~ — `task health`, que separa os quatro
+      diagnósticos e indica a recuperação **menos destrutiva primeiro**
+- [ ] **Cookies compartilhados entre telas** — divergência com motivo técnico; os
+      quatro contornos avaliados estão documentados, nenhum é limpo
+- [ ] **Tailscale autenticado** — depende de um clique seu: não há authkey no cofre,
+      e `sudo tailscale up` imprime a URL de login
+- [ ] **KasmVNC** — daria resolução dinâmica no lugar do 1920×1080 fixo; avaliar exige
+      subir o droplet e medir, e o ganho é conforto, não capacidade
+
+### A pendência que não é técnica
+
+O projeto está completo e **sem uso definido**. Reproduz o modelo, tem 35 cláusulas
+atendidas e passa em quatro suítes — mas ninguém o usa para nada real, e custa
+US$ 2/mês parado.
+
+O passo que destravaria valor é escolher **uma tarefa repetitiva de verdade** e ver
+se ele a executa melhor que à mão. Sem isso, permanece um estudo bem-feito.
