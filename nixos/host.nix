@@ -254,11 +254,35 @@ in
     "d ${workspace}/projects 0755 agent agent -"
 
     # Estado do servico: do agentd, com o grupo agent apenas LENDO.
+    #
+    # ATENCAO: AS REGRAS ABAIXO NAO SAO APLICADAS, e isso foi medido em 30/08/2026:
+    #
+    #   Detected unsafe path transition /workspace (owned by agent)
+    #   -> /workspace/agent (owned by agentd) during canonicalization
+    #
+    # O systemd-tmpfiles recusa atravessar mudanca de dono no meio do caminho.
+    # Como `/workspace` e do `agent` e `/workspace/agent` do `agentd`, TODA
+    # regra daqui para baixo e descartada -- em silencio, sem falhar a unidade.
+    #
+    # Quem de fato poe dono e permissao nestes diretorios e o oneshot
+    # `agent-state-ownership`, logo abaixo. Elas ficam aqui como declaracao da
+    # intencao e porque nao custam nada, mas NAO conte com elas: diretorio novo
+    # sob /workspace/agent tem de ser criado la, nao aqui.
     "z ${workspace}/agent 2750 agentd agent -"
     "z ${workspace}/agent/locks 2750 agentd agent -"
     "z ${workspace}/agent/status 2750 agentd agent -"
     "z ${workspace}/agent/conversations 2750 agentd agent -"
     "z ${workspace}/agent/screenshots 2750 agentd agent -"
+
+    # `screens/` e o UNICO estado do servico que o grupo agent ESCREVE (2770,
+    # nao 2750): quem cria tela e `screen-add`, que roda como `agent`. Sem isto
+    # ele morre em "mkdir: Permission denied" -- medido em 30/08/2026.
+    #
+    # O que impede isso de virar escalada: o nome do arquivo e o unico dado que
+    # atravessa para o servico root, e ele passa por `case [2-9]` antes de
+    # chegar ao `systemctl`. Nome fora disso e ignorado com aviso, entao nao ha
+    # como injetar unidade. Tela, alem disso, nao e fronteira de seguranca no
+    # desenho deste projeto -- quem alcanca uma alcanca o mesmo /workspace.
     "z ${workspace}/agent/tasks 0750 agentd agent -"
     "z ${workspace}/agent/events 0750 agentd agent -"
 
@@ -362,6 +386,15 @@ in
       # Sai em silencio se o volume nao montou: `nofail` permite a maquina subir
       # sem ele, e nesse caso nao ha estado para normalizar.
       [ -d ${workspace}/agent ] || exit 0
+      # `screens/` guarda quais telas devem subir no boot. Criado AQUI, e nao
+      # por tmpfiles: as regras de /workspace/agent sao recusadas por "unsafe
+      # path transition" (ver o comentario la em cima).
+      #
+      # 2770 porque e o UNICO estado do servico que o grupo agent ESCREVE --
+      # `screen-add` roda como `agent`. O nome do arquivo passa por `case
+      # [2-9]` no agent-screens antes de virar argumento de systemctl, entao
+      # nao ha unidade a injetar por ali.
+      mkdir -p ${workspace}/agent/screens
       chown -R agentd:agent ${workspace}/agent
       # O cofre e as regras do agente sao do agentd SOZINHO -- pertencer ao
       # grupo da acesso ao trabalho, nunca ao segredo nem a propria instrucao.
@@ -381,6 +414,7 @@ in
       # do operador rodam como usuarios diferentes e os dois legitimamente as
       # tomam. Arquivo criado por uma versao anterior chega aqui com 0644.
       chmod g+w ${workspace}/agent/locks/*.lock 2>/dev/null || true
+      chmod 2770 ${workspace}/agent/screens
       true
     '';
   };
@@ -527,6 +561,46 @@ in
     "chrome@1.service"
   ];
 
+  # Telas 2..9: quem manda e o marcador no volume duravel, nao `systemctl
+  # enable`.
+  #
+  # No NixOS /etc/systemd/system e READ-ONLY -- aponta para o store. O
+  # `enable` de uma instancia templada precisa gravar um symlink ali e falha
+  # com "Read-only file system". Medido em 30/08/2026: `screen-add 2` saia com
+  # rc=1 e nenhuma unidade da tela subia.
+  #
+  # Poe a fonte de verdade onde ela ja deveria estar: o volume. A tela criada
+  # sobrevive ao rebuild do sistema E a troca de SO, porque o marcador nao mora
+  # no disco do droplet.
+  systemd.services.agent-screens = {
+    description = "agent computer - sobe as telas marcadas no volume duravel";
+    after = [ "workspace.mount" "chrome@1.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = with pkgs; [ systemd coreutils ];
+    script = ''
+      # Sem marcador nenhum, nao ha o que fazer -- e isso e o normal.
+      [ -d /workspace/agent/screens ] || exit 0
+      for marker in /workspace/agent/screens/*; do
+        [ -e "$marker" ] || continue
+        screen="$(basename "$marker")"
+        case "$screen" in
+          [2-9]) ;;
+          *) echo "marcador ignorado (fora de 2..9): $screen"; continue ;;
+        esac
+        echo "subindo a tela $screen"
+        # `|| true` de proposito: uma tela que nao sobe nao pode impedir as
+        # outras, nem deixar a unidade em falha e travar o multi-user.target.
+        systemctl start \
+          "xvfb@$screen" "openbox@$screen" "x11vnc@$screen" \
+          "novnc@$screen" "chrome@$screen" || true
+      done
+    '';
+  };
+
   # ---------------------------------------------------------------------------
   # Porta HTTP de tarefas e entrega de avisos
   # ---------------------------------------------------------------------------
@@ -535,6 +609,22 @@ in
     after = [ "network-online.target" "agentd-vault-passphrase.service" ];
     wants = [ "network-online.target" ];
     requires = [ "agentd-vault-passphrase.service" ];
+    # SEM ISTO A PORTA NAO SOBE NO BOOT, e o modo de falha e mudo.
+    #
+    # `after` e `requires` so dizem ORDEM e dependencia -- nao fazem nada
+    # comecar. Sem alguem que a QUEIRA, a unidade fica declarada e parada:
+    # `systemctl is-enabled` responde "linked" em vez de "enabled", nenhuma
+    # unidade entra em falha, e o `systemctl status` do sistema segue
+    # "running".
+    #
+    # Medido em 30/08/2026: depois de um reboot, o agentd-api ficou parado por
+    # 26 minutos, ate uma suite inicia-lo por acaso. A suite HTTP reprovou com
+    # NOVE erros em cascata -- porta sem escutar, health vazio, 000 no lugar de
+    # 401, criacao de tarefa falhando -- todos de uma causa so.
+    #
+    # No Ubuntu isto vinha do `systemctl enable` no cloud-init. A migracao para
+    # NixOS trouxe a unidade e deixou o `enable` para tras.
+    wantedBy = [ "multi-user.target" ];
     unitConfig.RequiresMountsFor = workspace;
     serviceConfig = {
       User = "agentd";

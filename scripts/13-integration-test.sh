@@ -9,6 +9,8 @@
 # Não aborta na primeira falha: soma os erros e devolve o total, para uma
 # execução mostrar tudo que está quebrado em vez de um por vez.
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/suite-lock.sh"
+suite_lock "$(basename "$0")"
 set -uo pipefail
 load_token
 
@@ -20,13 +22,24 @@ ip="$(droplet_ip)"
 [ -z "$ip" ] && { echo "🛑 droplet nao existe — rodar task up"; exit 1; }
 echo "teste integrado em $ip"
 
-XAI_KEY="$(timeout 25s pass show bassi/xai/apikey 2>/dev/null | head -1)"
-[ -z "$XAI_KEY" ] && { echo "🛑 chave da xAI nao disponivel"; exit 1; }
 
 # agentd roda com a chave no AMBIENTE, nunca em linha de comando: `ps` exporia
 # o valor a qualquer processo da maquina.
 run_agent() {
-  agent_ssh "XAI_API_KEY='$XAI_KEY' /usr/local/bin/agentd $*"
+  # Roda como `agentd`, o dono do estado -- e nao como `agent`.
+  #
+  # Nao e preferencia: o diretorio de travas e 2750 agentd:agent, entao `agent`
+  # LE mas nao CRIA arquivo ali. O sintoma era "abrindo arquivo de trava:
+  # permission denied" depois de a tarefa ja ter sido criada e a habilidade
+  # aplicada -- o trabalho comecava e morria na hora de tomar a tela.
+  #
+  # Afrouxar o diretorio para 2770 resolveria e seria o remendo errado: o estado
+  # tem UM dono, e o CLI e ferramenta de OPERADOR. A autoridade dele e a chave
+  # de root, nao uma permissao de grupo.
+  #
+  # Efeito colateral bem-vindo: a chave do modelo sai da linha de comando (onde
+  # `ps` a expunha) e passa a vir do cofre.
+  agentd_run "$*"
 }
 
 echo
@@ -76,7 +89,7 @@ echo
 echo "=== 2. as telas subiram sozinhas ==="
 for unit in xvfb openbox x11vnc novnc chrome; do
   st="$(agent_ssh "systemctl is-active ${unit}@1.service 2>/dev/null")"
-  [ "$st" = "active" ] && ok "${unit}@1" || fail "${unit}@1: ${st:-sem modelAnswer}"
+  [ "$st" = "active" ] && ok "${unit}@1" || fail "${unit}@1: ${st:-sem resposta}"
 done
 
 echo
@@ -145,7 +158,7 @@ fi
 if echo "$sentPrompt" | grep -q "/estilo"; then
   fail "o marcador /estilo devia ter saido do texto"
 else
-  ok "marcador removido do texto sentPrompt ao modelo"
+  ok "marcador removido do texto enviado ao modelo"
 fi
 
 echo
@@ -176,9 +189,18 @@ print(json.load(open('/workspace/agent/tasks/$runMark-takeover.json'))['State'])
 echo
 echo "=== 8. a trava de uma tarefa por tela vale ==="
 out="$(run_agent -screen 1 -prompt "'qualquer outra coisa'" 2>&1)"
-# A mensagem real diz "já tem uma tarefa activeTask", com acento. Procurar sem
-# acento fazia o teste reprovar uma trava que funcionava.
-if echo "$out" | grep -q "tem uma tarefa activeTask"; then
+# A mensagem real e "a tela já tem uma tarefa ativa" (domain/task.go).
+#
+# Aqui houve DOIS defeitos empilhados, e o segundo escondeu o primeiro:
+#   1. procurar sem acento reprovava uma trava que funcionava;
+#   2. o sweep de renomeacao para o ingles traduziu "ativa" -> "activeTask"
+#      DENTRO desta string e do comentario, e ai passou a nao casar com nada.
+#
+# O segundo e exatamente a armadilha que a regra de idioma descreve: literal de
+# string nunca se renomeia, so identificador. Medido em 30/08/2026 -- o teste
+# reprovava "a trava nao impediu a segunda tarefa" com a trava intacta, provada
+# pelo 409 do `25-serve-integration-test`.
+if echo "$out" | grep -q "tem uma tarefa ativa"; then
   ok "segunda tarefa recusada enquanto a tela esta ocupada"
 else
   fail "a trava nao impediu a segunda tarefa"

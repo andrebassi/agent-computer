@@ -22,6 +22,8 @@
 # Nao aborta na primeira falha: soma os erros, para uma execucao mostrar TODAS
 # as brechas em vez de uma por vez.
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/suite-lock.sh"
+suite_lock "$(basename "$0")"
 set -uo pipefail
 load_token
 

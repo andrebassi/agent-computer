@@ -120,6 +120,12 @@ tasks:
     cmds:
       - ./scripts/29-nixos-cloudinit.sh
 
+  test:cov:
+    desc: 'Gate de cobertura: reprova abaixo de 90% em linha e branch, domínio 100%'
+    dir: agent
+    cmds:
+      - ./scripts/coverage-gate.sh
+
   lint:
     desc: 'Gate dos scripts: variável órfã (sobra de renomeação) e uso da API sem load_token'
     cmds:

@@ -12,6 +12,8 @@
 # Nao aborta na primeira falha: soma os erros e devolve o total no rc, para uma
 # execucao mostrar TODOS os problemas em vez de um por vez.
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/suite-lock.sh"
+suite_lock "$(basename "$0")"
 set -uo pipefail
 load_token
 

@@ -6,6 +6,8 @@
 # validação que nunca falha não está validando, está decorando: cada seção
 # aqui existe porque tem como dar errado de verdade.
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/suite-lock.sh"
+suite_lock "$(basename "$0")"
 set -uo pipefail
 load_token
 
@@ -51,7 +53,24 @@ if agent_ssh 'mountpoint -q /workspace'; then
 else
   fail "/workspace está no DISCO DO DROPLET — some num update"
 fi
-if [ "$(agent_ssh 'cat /var/lib/agent-computer-volume 2>/dev/null')" = "VOLUME_MONTADO" ]; then
+# A montagem PERSISTE no boot? A pergunta e a mesma nos dois sistemas, mas a
+# evidencia e diferente -- e procurar a evidencia do Ubuntu no NixOS reprova uma
+# montagem perfeita.
+#
+# Medido em 30/08/2026: o marcador `/var/lib/agent-computer-volume` e escrito
+# pelo `runcmd` do cloud-init e nao existe no NixOS, onde a montagem vem de
+# `fileSystems."/workspace"` -- declarada, e por isso mesmo sem marcador. As
+# duas linhas acima ja provavam o que importa (e ponto de montagem, e vem de
+# /dev/sda), e ainda assim a suite reprovava.
+if [ "$(agent_os)" = "nixos" ]; then
+  # No NixOS a persistencia e a unidade de montagem gerada pela configuracao:
+  # se ela esta ativa, o proximo boot a monta de novo.
+  if [ "$(agent_ssh 'systemctl is-active workspace.mount 2>/dev/null')" = "active" ]; then
+    ok "montagem declarada e ativa (workspace.mount)"
+  else
+    fail "workspace.mount nao esta ativa -- a montagem nao volta no boot"
+  fi
+elif [ "$(agent_ssh 'cat /var/lib/agent-computer-volume 2>/dev/null')" = "VOLUME_MONTADO" ]; then
   ok "cloud-init confirmou a montagem"
 else
   fail "cloud-init não montou o volume"
@@ -187,6 +206,43 @@ if agent_ssh 'test -f /workspace/agent/anthropic.env' 2>/dev/null; then
 else
   fail "credencial ausente em /workspace/agent/anthropic.env — a delegação vai falhar"
 fi
+echo
+echo "=== 11. as unidades essenciais SOBEM NO BOOT ==="
+# Seguir ativo agora nao prova que volta depois do reboot.
+#
+# `after` e `requires` so ordenam; sem alguem que QUEIRA a unidade, ela fica
+# declarada e parada no boot seguinte -- `is-enabled` responde "linked" em vez
+# de "enabled", nenhuma unidade entra em falha, e o sistema segue "running".
+#
+# Medido em 30/08/2026: o `agentd-api` (a unidade central) perdeu o `wantedBy`
+# na migracao para NixOS e ficou 26 minutos fora do ar depois de um reboot. A
+# suite HTTP reprovou com NOVE erros em cascata, todos de uma causa so, e o
+# diagnostico foi parar na cascata em vez da causa.
+#
+# `static` e legitimo para instancia de template (chrome@1 e companhia): quem
+# as puxa e o multi-user.target.wants declarado no host.nix, e uma instancia
+# templada nao se "habilita".
+for unit in agentd-api agentd-notify.timer agentd-vault-passphrase \
+            agent-state-ownership agent-screens; do
+  state="$(agent_ssh "systemctl is-enabled $unit 2>&1" | tr -d '\r')"
+  case "$state" in
+    enabled|enabled-runtime|static|generated|indirect)
+      ok "$unit sobe no boot ($state)" ;;
+    *)
+      fail "$unit NAO sobe no boot ($state) -- some no proximo reboot" ;;
+  esac
+done
+
+# As telas: quem as puxa e o alvo, entao a pergunta certa nao e `is-enabled`
+# delas, e sim se o alvo as quer.
+wanted="$(agent_ssh "systemctl show multi-user.target -p Wants --value 2>/dev/null" | tr ' ' '\n')"
+for unit in xvfb@1.service chrome@1.service; do
+  if printf '%s' "$wanted" | grep -qF "$unit"; then
+    ok "$unit puxada pelo multi-user.target"
+  else
+    fail "$unit nao esta em multi-user.target.wants -- a tela 1 nao volta no boot"
+  fi
+done
 
 echo
 echo "erros: $errs"

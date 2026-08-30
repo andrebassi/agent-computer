@@ -45,37 +45,37 @@ func TestReadTokenTrimsTrailingNewline(t *testing.T) {
 func TestReadTokenFailsClosed(t *testing.T) {
 	cases := []struct {
 		name     string
-		setup  func(*testing.T) string
+		setup    func(*testing.T) string
 		expected error
 	}{
 		{
 			name:     "caminho vazio",
-			setup:  func(*testing.T) string { return "" },
+			setup:    func(*testing.T) string { return "" },
 			expected: ErrTokenMissing,
 		},
 		{
 			name:     "arquivo ausente",
-			setup:  func(t *testing.T) string { return filepath.Join(t.TempDir(), "sumido") },
+			setup:    func(t *testing.T) string { return filepath.Join(t.TempDir(), "sumido") },
 			expected: ErrTokenMissing,
 		},
 		{
 			name:     "legível por outros",
-			setup:  func(t *testing.T) string { return writeToken(t, testToken, 0o644) },
+			setup:    func(t *testing.T) string { return writeToken(t, testToken, 0o644) },
 			expected: ErrTokenLoose,
 		},
 		{
 			name:     "legível pelo grupo",
-			setup:  func(t *testing.T) string { return writeToken(t, testToken, 0o640) },
+			setup:    func(t *testing.T) string { return writeToken(t, testToken, 0o640) },
 			expected: ErrTokenLoose,
 		},
 		{
 			name:     "curto demais",
-			setup:  func(t *testing.T) string { return writeToken(t, "curto", 0o600) },
+			setup:    func(t *testing.T) string { return writeToken(t, "curto", 0o600) },
 			expected: ErrTokenShort,
 		},
 		{
 			name:     "vazio",
-			setup:  func(t *testing.T) string { return writeToken(t, "", 0o600) },
+			setup:    func(t *testing.T) string { return writeToken(t, "", 0o600) },
 			expected: ErrTokenShort,
 		},
 	}

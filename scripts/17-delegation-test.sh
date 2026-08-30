@@ -14,6 +14,8 @@
 # `unittest` e biblioteca padrao — sobrevive ao rebuild sem entrar na lista de
 # pacotes do cloud-init.
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/suite-lock.sh"
+suite_lock "$(basename "$0")"
 set -euo pipefail
 # Sem isto, `droplet_ip` nao consulta a API, `agent_ssh` devolve rc=1 e o `set
 # -e` aborta o script SEM MENSAGEM -- ele parece ter terminado na primeira etapa.
@@ -78,5 +80,44 @@ if ! echo "$saidaTeste" | grep -qE '^OK$|^OK \('; then
 fi
 
 echo
-echo "=== 4/4 o programa imprime o numero lido da web? ==="
-agent_ssh "cd '$projectDir' && python3 main.py 2>&1 | head -3"
+echo "=== 4/4 o programa imprime o numero REAL lido da web? ==="
+# A secao 3 prova que o teste do agente passa. Isso ainda nao prova que ele leu
+# a web: `format_count` passaria nos quatro casos com `main.py` imprimindo um
+# numero inventado.
+#
+# Aqui o numero e comparado com a fonte, buscada DAQUI. E a unica verificacao
+# que separa "o agente navegou" de "o agente chutou um numero plausivel" -- e
+# chutar um numero de estrelas plausivel e exatamente o que um modelo faz bem.
+saidaPrograma="$(agent_ssh "cd '$projectDir' && python3 main.py 2>&1 | head -3")"
+echo "$saidaPrograma" | sed 's/^/  /'
+
+# Digitos do que o programa imprimiu, sem os separadores.
+impresso="$(printf '%s' "$saidaPrograma" | tr -cd '0-9')"
+if [ -z "$impresso" ]; then
+  echo "🛑 o programa nao imprimiu numero nenhum"
+  exit 1
+fi
+
+# A fonte, lida daqui. Se a API do GitHub nao responder, o teste NAO aprova por
+# omissao: diz que nao pode comparar, e segue sem reprovar -- indisponibilidade
+# de terceiro nao e defeito do produto, mas tambem nao e prova.
+real="$(timeout 30s curl -sS --max-time 20 https://api.github.com/repos/golang/go 2>/dev/null \
+  | sed -n 's/.*"stargazers_count"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)"
+
+if [ -z "$real" ]; then
+  echo "  ⚠️  a API do GitHub nao respondeu daqui -- sem comparacao possivel"
+  echo "      (o numero impresso foi $impresso; confira a mao se importar)"
+elif [ "$impresso" = "$real" ]; then
+  echo "  ✅ bate com a fonte: $real estrelas"
+else
+  # Tolera diferenca pequena: estrela muda entre a leitura do agente e esta.
+  diferenca=$(( impresso > real ? impresso - real : real - impresso ))
+  if [ "$diferenca" -le 50 ]; then
+    echo "  ✅ bate com a fonte dentro da margem: agente $impresso, agora $real"
+  else
+    echo "🛑 o numero NAO bate com a fonte: agente $impresso, real $real"
+    echo "   diferenca de $diferenca estrelas -- alem do que o tempo explica."
+    echo "   O agente provavelmente inventou em vez de ler a pagina."
+    exit 1
+  fi
+fi

@@ -244,7 +244,20 @@ func (s *Server) describe(r *http.Request, task *domain.Task) taskResponse {
 // decodeBody lê o corpo JSON, respondendo o erro certo quando não dá.
 func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	// Campo desconhecido RECUSA, em vez de ser ignorado em silencio.
+	//
+	// O padrao do Go e ignorar, e isso esconde erro de cliente: quem escrever
+	// `"screens": 3` em vez de `"screen": 3` recebe 201 e a tarefa vai para a
+	// tela 1, sem nada indicando o engano. Num cliente que dispara trabalho numa
+	// maquina compartilhada, isso e a diferenca entre "errei o campo" e "por que
+	// esta rodando na tela errada?".
+	//
+	// A API tem um cliente so -- os scripts deste repositorio --, entao a
+	// rigidez nao custa compatibilidade. Achado pelo teste hostil em 30/08/2026,
+	// que mandou {"prompt":"oi","screen":2,"admin":true} e recebeu 201.
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, "corpo grande demais", nil)

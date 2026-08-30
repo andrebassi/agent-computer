@@ -47,6 +47,35 @@ agentd -prompt "@digitalocean audite a conta e escreva o relatório"
 task snapshot && task destroy              # guarda e derruba: US$ 26 → US$ 2/mês
 ```
 
+## Como se verifica que está funcionando
+
+Cinco camadas, e cada uma pega o que a anterior não alcança. O mapa completo de
+**funcionalidade × teste** está em [`docs/TEST-MAP.md`](docs/TEST-MAP.md).
+
+```bash
+task lint             # 5 gates: variável órfã, API sem token, trava, mensagem inexistente
+task nixos:validate   # config NixOS: sintaxe, ASCII, sistema inteiro
+task test:cov         # cobertura ≥90% de statements, domínio 100%, com -race
+task suites           # 4 suítes de máquina (43 seções)
+task functional       # 3 testes que CHAMAM O MODELO de verdade
+task hostile          # entrada malformada, degradação, concorrência
+```
+
+A regra que o mapa aplica: **uma funcionalidade tem cobertura quando existe um
+teste que falha se ela for removida.** Contar que algo "existe" não é cobertura —
+foi assim que `claude --version` passou por prova de que a delegação funciona,
+quando prova apenas que o binário executa.
+
+Cada camada achou o que as outras não achariam:
+
+| Camada | Achou |
+|---|---|
+| máquina | sudoers descartado inteiro; `locks/` com dono errado pondo toda tela em 409; `agentd-notify` como usuário errado quebrando a proatividade em silêncio |
+| funcional | **`panic` por ponteiro nulo** derrubando o binário; trava `0644` que `flock` não abre; três scripts de teste quebrados, um deles **passando** com a verificação vazia |
+| hostil | campo desconhecido aceito com 201 (um `"screens"` em vez de `"screen"` ia para a tela errada em silêncio) |
+| boot | **`agentd-api` não subia depois do reboot** — perdeu o `wantedBy` na migração; sistema `running`, zero unidades em falha, porta fora do ar |
+| a própria infra de teste | **duas suítes concorrentes** contra a mesma máquina — log entrelaçado, `erros: 1` mentiroso numa e `erros: 0` sem valor na outra; fechado por `scripts/suite-lock.sh` |
+
 ## Dois sistemas, e os dois valem
 
 A máquina pode nascer de dois jeitos. **Nenhum substitui o outro.**

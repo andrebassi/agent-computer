@@ -81,9 +81,38 @@ load_token() {
 }
 
 # Devolve o IP público do droplet, ou vazio se ele não existir.
+# Cache do IP dentro de UMA execução.
+#
+# `agent_ssh` chama isto a cada comando, e uma suíte faz dezenas de chamadas --
+# ou seja, dezenas de consultas à API do DigitalOcean para um dado que não muda
+# durante a execução. Um soluço da API no meio de um teste vira falso vermelho:
+# `droplet_ip` devolve vazio, o SSH tenta conectar a lugar nenhum e o log diz
+# "droplet 'agent-computer' não existe" com a máquina de pé.
+#
+# Medido em 30/08/2026, no `13-integration-test`: três seções reprovaram por
+# isso, com `uptime` respondendo normalmente meio minuto depois.
+#
+# O cache dura só o processo. Recriar o droplet num script que já resolveu o IP
+# exigiria limpar a variável -- e nenhum script faz as duas coisas, porque
+# criação e verificação são scripts diferentes.
+DROPLET_IP_CACHE="${DROPLET_IP_CACHE:-}"
+
 droplet_ip() {
-  timeout 30s doctl compute droplet list --format Name,PublicIPv4 --no-header 2>/dev/null \
-    | awk -v n="$DROPLET_NAME" '$1==n {print $2}' | head -1
+  if [ -n "$DROPLET_IP_CACHE" ]; then
+    printf '%s\n' "$DROPLET_IP_CACHE"
+    return 0
+  fi
+  local address
+  # Duas tentativas: a API do DO tem soluço, e a segunda leitura custa 3s
+  # contra o custo de reprovar uma suíte inteira de vinte minutos.
+  for _ in 1 2; do
+    address="$(timeout 30s doctl compute droplet list --format Name,PublicIPv4 --no-header 2>/dev/null \
+      | awk -v n="$DROPLET_NAME" '$1==n {print $2}' | head -1)"
+    [ -n "$address" ] && break
+    sleep 3
+  done
+  [ -n "$address" ] && DROPLET_IP_CACHE="$address"
+  printf '%s\n' "$address"
 }
 
 # Devolve o ID do droplet, ou vazio.

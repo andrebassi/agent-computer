@@ -73,7 +73,7 @@ func TestCreateTaskReturns201(t *testing.T) {
 func TestAuthenticationRejectsBadTokens(t *testing.T) {
 	handler, _, _ := newServer(t, &fakeRunner{})
 	cases := []struct {
-		name      string
+		name   string
 		header string
 	}{
 		{"sem cabeçalho", ""},
@@ -146,6 +146,14 @@ func TestBadRequestsReturn400(t *testing.T) {
 		"json quebrado": `{quebrado`,
 		"prompt vazio":  `{"prompt":"","screen":1}`,
 		"tela inválida": `{"prompt":"x","screen":99}`,
+		// Campo desconhecido RECUSA, e não é preciosismo.
+		//
+		// O padrão do Go é ignorar, e isso esconde erro de cliente: quem
+		// escrever `"screens"` em vez de `"screen"` recebia 201 e a tarefa ia
+		// para a tela 1, sem nada indicando o engano. Achado pelo teste hostil
+		// em 30/08/2026, que mandou `admin:true` e recebeu 201.
+		"campo desconhecido": `{"prompt":"x","screen":1,"admin":true}`,
+		"campo com typo":     `{"prompt":"x","screens":3}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
