@@ -99,6 +99,18 @@ Duas coisas que teriam custado uma reconstrução cada:
    afirma: *"Neither the root account nor any wheel user has a password or SSH
    authorized key."* Seria um droplet **inalcançável**.
 
+### Duas armadilhas de operação, medidas nesta troca
+
+**A API do DigitalOcean é eventualmente consistente.** Um `destroy` seguido de
+`create` encontra o droplet ainda listado e sai com *"já existe — nada a fazer"*,
+**com `rc=0`**. O caminho inteiro parece ter dado certo e nenhuma máquina foi
+criada. O `01-create.sh` passou a ler duas vezes, com 6 s de pausa.
+
+**Não editar um script enquanto ele executa.** O bash relê o arquivo a partir do
+deslocamento antigo, e uma edição no meio produz `syntax error near unexpected
+token` numa linha que está sintaticamente correta em disco. Custou um
+diagnóstico inteiro nesta sessão.
+
 > 🛑 **`NIXOS_IMPORT`, nunca `NIXOS_CONFIG`.** O guard
 > `[[ -e /etc/nixos/configuration.nix ]] && return 0` do `nixos-infect` aborta a
 > função inteira — pulando também `hardware-configuration.nix` e a configuração

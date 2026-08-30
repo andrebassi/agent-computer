@@ -14,9 +14,22 @@ source "$(dirname "$0")/lib.sh"
 set -euo pipefail
 load_token
 
+# A consulta e feita DUAS vezes, com pausa, e nao uma.
+#
+# A API do DigitalOcean e eventualmente consistente: um `destroy` seguido de
+# `create` na mesma linha encontra o droplet ainda listado e sai com "ja existe
+# -- nada a fazer", com rc=0. O caminho inteiro parece ter dado certo e nenhuma
+# maquina foi criada. Medido em 30/08/2026, ao trocar o Ubuntu pelo NixOS.
+#
+# Duas leituras separadas por 6s distinguem "existe de verdade" de "acabou de
+# ser destruido e ainda aparece".
 if [ -n "$(droplet_id)" ]; then
-  echo "ℹ️  droplet '$DROPLET_NAME' ja existe (IP $(droplet_ip)) — nada a fazer."
-  exit 0
+  sleep 6
+  if [ -n "$(droplet_id)" ]; then
+    echo "ℹ️  droplet '$DROPLET_NAME' ja existe (IP $(droplet_ip)) — nada a fazer."
+    exit 0
+  fi
+  echo "  (a API ainda listava o droplet destruido; seguindo)"
 fi
 
 # Dois caminhos, e o gate abaixo vale para os dois.

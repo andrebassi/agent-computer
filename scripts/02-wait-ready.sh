@@ -20,8 +20,20 @@ ssh_root() {
       -o ConnectTimeout=8 -o BatchMode=yes "root@${ip}" "$@" 2>/dev/null
 }
 
-echo "esperando cloud-init em $ip (instalação leva ~5-8 min)"
-deadline=$(( $(date +%s) + 900 ))
+# O teto depende do caminho, e a diferenca e grande.
+#
+# No Ubuntu o cloud-init instala pacote pronto: 5-8 min. No NixOS o
+# nixos-infect ainda baixa o nixpkgs, CONSTROI o sistema e reinicia -- e o que
+# nao vier do cache binario e compilado num droplet de 2 vCPU. Manter 15 min
+# faria a espera estourar num boot que estava indo bem, e o diagnostico
+# apontaria para o lugar errado.
+if [ "$AGENT_OS" = "nixos" ]; then
+  echo "esperando o NixOS em $ip (infect + build + reboot; leva ~10-20 min)"
+  deadline=$(( $(date +%s) + 2400 ))
+else
+  echo "esperando cloud-init em $ip (instalação leva ~5-8 min)"
+  deadline=$(( $(date +%s) + 900 ))
+fi
 
 while [ "$(date +%s)" -lt "$deadline" ]; do
   # Estado 1: a porta SSH sequer autentica ainda.
@@ -66,10 +78,25 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 
   # Estado 2: rodando de verdade. Mostrar em que passo está, para a espera
   # ser informativa em vez de um relógio anônimo.
-  passo="$(ssh_root 'tail -3 /var/log/cloud-init-output.log 2>/dev/null | tr -d "\r" | grep -v "^$" | tail -1' | cut -c1-70)"
-  echo "  [ci:$ci_status] ${passo:-instalando...} ($(date +%H:%M:%S))"
+  #
+  # No caminho NixOS a maquina TROCA de sistema no meio: comeca Ubuntu com
+  # cloud-init rodando o infect, reinicia, e volta como NixOS -- onde
+  # `cloud-init` nao existe mais e o log dele tambem nao. Ler so o log do
+  # cloud-init deixaria a segunda metade da espera muda, e um boot demorado
+  # pareceria travado.
+  if [ -z "$ci_status" ]; then
+    passo="$(ssh_root 'tail -2 /tmp/infect.log 2>/dev/null | tr -d "\r" | grep -v "^$" | tail -1')"
+    if [ -z "$passo" ]; then
+      passo="$(ssh_root 'systemctl is-system-running 2>/dev/null')"
+      passo="sistema: ${passo:-subindo}"
+    fi
+    echo "  [nixos] $(echo "$passo" | cut -c1-70) ($(date +%H:%M:%S))"
+  else
+    passo="$(ssh_root 'tail -3 /var/log/cloud-init-output.log 2>/dev/null | tr -d "\r" | grep -v "^$" | tail -1' | cut -c1-70)"
+    echo "  [ci:$ci_status] ${passo:-instalando...} ($(date +%H:%M:%S))"
+  fi
   sleep 15
 done
 
-echo "🛑 estourou 15 min. Diagnostico: task logs"
+echo "🛑 estourou o tempo. Diagnostico: task logs (Ubuntu) ou /tmp/infect.log (NixOS)"
 exit 1
