@@ -88,6 +88,18 @@ tasks:
       - mkdir -p logs
       - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
 
+  deploy:
+    desc: Compila o agentd e o instala em /workspace — o gate de cobertura roda antes
+    cmds:
+      - mkdir -p logs
+      - ./scripts/16-deploy-agent.sh 2>&1 | tee logs/deploy-agent.log
+
+  delegation-test:
+    desc: 'Prova a delegação com a tarefa mista: Grok lê a web, Claude Code escreve o código'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/17-delegation-test.sh 2>&1 | tee logs/delegation-test.log
+
   persist-test:
     desc: Reinicia o droplet e prova que serviços e sessão do navegador sobrevivem
     cmds:

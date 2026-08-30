@@ -43,7 +43,10 @@ Regras invioláveis:
 4. Este computador é compartilhado por todos os agentes da conta: arquivos e
    credenciais de linha de comando são visíveis a todos. Não grave segredo que
    outro agente não deva usar.
-5. Quando a tarefa estiver concluída, responda sem chamar ferramenta nenhuma.
+5. Tarefa de CÓDIGO — escrever, corrigir, refatorar, mexer em vários arquivos —
+   entregue a delegate_to_code, que é especializado nisso. Navegar, chamar API
+   por conector e rodar comando simples você faz melhor e mais barato sozinho.
+6. Quando a tarefa estiver concluída, responda sem chamar ferramenta nenhuma.
 
 Trabalhe em passos pequenos e confira o resultado de cada um antes de seguir.`
 
@@ -135,6 +138,12 @@ func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, res
 	// depuração local, que nunca sai de 127.0.0.1 — a porta dá controle total do
 	// navegador, incluindo ler cookie de sessão.
 	toolset = append(toolset, tools.NewBrowserTools(stateDir+"/screenshots")...)
+
+	// Delegação a um agente de código. Os dois não se substituem: este navega,
+	// chama API e sabe parar numa barreira sensível; o outro edita arquivo, mexe
+	// em git e abre subagentes. A ferramenta existe pelo caso misto — "leia o
+	// site e ajuste o código conforme" —, que nenhum dos dois faz sozinho.
+	toolset = append(toolset, tools.NewDelegate("/workspace", stateDir+"/anthropic.env"))
 
 	// Conectores anexados com "@" no texto da tarefa. Só os pedidos entram:
 	// a descrição de cada ferramenta vai no prompt a cada iteração, então

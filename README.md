@@ -30,6 +30,7 @@ Lab — serve para testar o conceito, não para produção.
 | [Arquitetura ponta a ponta](#arquitetura-ponta-a-ponta) | o modelo explicado, as 12 cláusulas com código e prova |
 | [Auditoria de fidelidade](#auditoria-de-fidelidade-à-documentação) | placar do que existe e do que falta |
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
+| [Avaliação do CloakBrowser](#avaliação-do-cloakbrowser) | por que evasão de anti-bot não entra aqui |
 | [`examples/`](examples/README.md) | conectores e habilidades prontos |
 
 
@@ -365,6 +366,22 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
       ele navegou, leu, **preencheu o usuário** e parou pedindo take-over — que é
       a cláusula da documentação funcionando por inteiro.
 
+- [x] ~~Orquestrar Grok e Claude Code~~ — ferramenta `delegate_to_code`,
+      **provada com a tarefa mista**: o Grok leu `stargazers_count = 136822` da
+      API do GitHub pelo navegador e delegou; o Claude Code escreveu três
+      arquivos Python e os 4 testes passaram, verificados de fora por SSH.
+      Ver §5.6 e o segundo caso real.
+
+- [ ] **O Claude Code não sobrevive ao `update`** — ele está em `/usr/bin`, que é
+      disco do sistema, e o `update` destrói o droplet remontando só o volume. A
+      credencial está no volume e volta sozinha; o binário não. Corrigir é
+      instalá-lo pelo `cloud-init`.
+
+- [x] ~~CloakBrowser~~ — **avaliado**: Chromium com 73 patches em C++, reCAPTCHA
+      v3 em 0,9. Decisão registrada: **não entra** — contradiz a regra nº 1 do
+      agente (parar e pedir take-over) e a camada grátis dá 1 sessão concorrente,
+      contra o modelo de N telas. Gatilho é o objetivo virar coleta em escala
+
 ### A pendência que não é técnica
 
 O projeto está completo e **sem uso definido**. Reproduz o modelo, tem 35 cláusulas
@@ -629,17 +646,17 @@ graça. O agente ganha quando há julgamento no meio.
 
 | Limite | Consequência |
 |---|---|
-| **o agente não dirige o navegador** | há `shell` e conectores; falta ferramenta que clique na tela. O Chrome está lá e o CDP está aberto, mas nada os usa |
 | sem paginação automática | uma listagem grande volta truncada, e a API raramente avisa |
 | resposta de API cortada em 8 KB | idem |
 | sem upload de arquivo por conector | |
 | teto de 60 iterações por tarefa | tarefa longa demais para no meio, com `ErrMaxIterations` |
 | uma tarefa por tela | por decisão, e a tela fica travada até resolver ou abandonar |
+| cookies não são compartilhados entre telas | divergência conhecida da doc — ver §10 da arquitetura |
 
-O primeiro é o mais importante e o menos óbvio: **o computador tem um navegador
-que o agente não pilota.** Ele serve para você assumir e para ver o que acontece,
-não para o agente navegar. Fechar essa lacuna seria acrescentar uma ferramenta
-que fale CDP com `127.0.0.1:922N` — o caminho está aberto, falta o código.
+> **O que mudou desde esta demonstração.** Ela foi escrita quando o agente
+> **não dirigia o navegador**: o Chrome estava lá e o CDP aberto, mas nada os
+> usava. As ferramentas `browser_*` fecharam essa lacuna, e é sobre elas que o
+> segundo caso, logo abaixo, se apoia.
 
 ---
 
@@ -654,6 +671,125 @@ que fale CDP com `127.0.0.1:922N` — o caminho está aberto, falta o código.
 
 Rodar a auditoria custou frações de centavo em inferência. O caro é deixar o
 droplet ligado sem usar — daí `task snapshot && task destroy` ao terminar.
+
+---
+
+### Segundo caso real: a tarefa mista — web + código
+
+Rodou em **30/08/2026**. É o caso que justifica a ferramenta `delegate_to_code`,
+porque **nenhum dos dois agentes o cumpre sozinho**: o Claude Code não enxerga a
+página, e o Grok escreveria o código a `sed`.
+
+**O que se quer:** ler um número que só existe numa página web e produzir código
+testado que use aquele número.
+
+#### O comando
+
+```bash
+task delegation-test        # scripts/17-delegation-test.sh
+```
+
+A tarefa, como chegou ao agente (uma linha só, é assim que ele recebe):
+
+> Abra no navegador `https://api.github.com/repos/golang/go` e leia o valor do
+> campo `stargazers_count`. Depois use `delegate_to_code` para pedir ao agente de
+> código: crie em `/workspace/projects/star-count` um módulo Python `formatter.py`
+> com a função `format_count(n)` que devolve o número com separador de milhar por
+> ponto (exemplo: 1234567 vira 1.234.567), um `main.py` que imprime `format_count`
+> do valor real que você leu, e `test_formatter.py` com `unittest` cobrindo zero,
+> três dígitos, quatro dígitos e sete dígitos. Critério de pronto:
+> `python3 -m unittest discover` passar dentro do diretório.
+
+#### O que aconteceu, na ordem
+
+```
+Grok, tela 2
+  ├─ browser_navigate  https://api.github.com/repos/golang/go
+  ├─ browser_read      lê stargazers_count = 136822
+  │
+  └─ delegate_to_code  "…com o valor 136822, crie formatter.py, main.py e teste…"
+          │
+          └─ Claude Code em /workspace/projects/star-count
+                ├─ escreve formatter.py, main.py, test_formatter.py
+                ├─ roda python3 -m unittest discover
+                └─ relatório de volta ──▶ Grok
+  
+estado final: tela 2: concluída
+```
+
+#### O que ele produziu
+
+```python
+# formatter.py
+"""Formatação de números com separador de milhar."""
+
+
+def format_count(n):
+    """Devolve n com ponto como separador de milhar (ex.: 1234567 -> '1.234.567')."""
+    return f"{n:,}".replace(",", ".")
+```
+
+```python
+# main.py
+from formatter import format_count
+
+# stargazers_count de https://api.github.com/repos/golang/go
+STARGAZERS_COUNT = 136822
+```
+
+#### A verificação, feita de fora
+
+O script **não acredita no relatório do agente** — roda o critério de pronto por
+conta própria, por SSH. Acreditar no relatório seria acreditar na palavra do
+próprio testado:
+
+```
+--- unittest ---
+test_quatro_digitos ... ok
+test_sete_digitos   ... ok
+test_tres_digitos   ... ok
+test_zero           ... ok
+
+Ran 4 tests in 0.000s
+OK
+
+=== 4/4 o programa imprime o numero lido da web? ===
+136.822
+rc=0
+```
+
+`136.822` é o número que estava na página naquele momento, formatado pelo código
+que o outro agente escreveu. É a prova de que a informação atravessou a fronteira
+entre os dois.
+
+#### Quatro coisas que este caso ensinou
+
+1. **O script apagou o diretório antes de começar.** Sem isso, um resultado de
+   uma corrida anterior faria o teste passar sem o agente ter feito nada — o modo
+   de falha mais silencioso que existe num teste de agente.
+
+2. **A primeira corrida saiu com `rc=0` tendo falhado.** O agente morreu em
+   `XAI_API_KEY não está no ambiente`, e o `| tee` da minha invocação devolveu o
+   código do `tee`. É a mesma armadilha que o `Taskfile` já documenta em
+   `set: [pipefail]` — e ela reapareceu num script novo, fora do Taskfile.
+
+3. **O Claude Code escreveu os testes em português** (`test_quatro_digitos`).
+   Ele não herda a convenção de idioma deste repositório, porque **não vê a
+   conversa nem o `CLAUDE.md` de quem delegou**. Se o nome importar, a exigência
+   vai *dentro* do texto delegado.
+
+4. **Não havia Go na máquina.** A primeira versão do teste pedia um módulo Go e
+   teria falhado no critério de pronto por falta de toolchain, não por culpa do
+   agente. `unittest` é biblioteca padrão do Python e sobrevive ao rebuild sem
+   entrar na lista de pacotes do `cloud-init`.
+
+#### Custo desta demonstração
+
+| | |
+|---|---|
+| Tarefa inteira, ponta a ponta | ~3 min |
+| Chamadas de ferramenta do Grok | 3 (navegar, ler, delegar) |
+| Inferências | 2 modelos, uma passada cada |
 
 ---
 
@@ -998,6 +1134,8 @@ pessoa não agiu é exatamente "tentar contornar a verificação".
 |---|---|---|
 | `shell` | executa comando | usa `bash -c`, **não** `-lc` — ver §9.4 |
 | `request_takeover` | pede que uma pessoa assuma | é o que transforma "preciso de ajuda" em estado executável |
+| `browser_*` | navega, lê, clica, preenche, fotografa | fala CDP direto com o Chrome da tela — ver §4 |
+| `delegate_to_code` | entrega trabalho de código a outro agente | ver §5.6 |
 | `<conector>.<operação>` | chama a API de um serviço | só entra quando anexado com `@` — ver §5.4 |
 
 #### 5.4 Conectores
@@ -1089,6 +1227,67 @@ subida de diretório gravaria fora da pasta.
 Habilidade inexistente vira **aviso**, não erro fatal: a pessoa pode ter digitado
 errado, e derrubar a tarefa inteira por um nome trocado é pior do que seguir
 dizendo o que faltou.
+
+#### 5.6 Delegação: quando o Grok chama o Claude Code
+
+O computador tem **dois** agentes instalados, e eles não se substituem. Delegar é
+o mecanismo que deixa cada um fazer o que faz melhor dentro de **uma** tarefa.
+
+| | Grok (`agentd`) | Claude Code |
+|---|---|---|
+| navegar, ler página, clicar | ✅ pela CDP, na tela que ele já tem | ❌ não tem tela |
+| chamar API por conector | ✅ manifesto, sem código | ⚠️ escreveria o `curl` na hora |
+| **pedir take-over e parar** | ✅ é a razão de ele existir | ❌ não tem esse conceito |
+| editar arquivo, mexer em git | ⚠️ só por `shell`, um `sed` por vez | ✅ é o ofício dele |
+| refatorar, rodar teste, corrigir | ⚠️ caro e desajeitado | ✅ abre subagente, itera sozinho |
+| rodar comando | ✅ | ✅ (é onde se sobrepõem, e só) |
+
+**O caso que justifica a ferramenta é o misto** — *"leia o site e ajuste o código
+conforme"*. Nenhum dos dois entrega isso sozinho: o Claude Code não enxerga a
+página, e o Grok escreveria o código a `sed`.
+
+```
+tarefa mista
+     │
+     ├── Grok: browser_navigate + browser_read  ──▶ lê o dado da página
+     │
+     └── Grok: delegate_to_code("…com o valor X, crie/ajuste …")
+                     │
+                     └── Claude Code em /workspace ──▶ escreve, roda teste, corrige
+                                   │
+                     relatório ◀───┘
+```
+
+**Três decisões que a ferramenta carrega:**
+
+1. **A descrição diz quando NÃO delegar.** Sem esse limite o modelo delega tudo —
+   inclusive o que faria melhor sozinho — e a tarefa paga duas inferências para
+   chegar ao mesmo lugar. O texto é explícito: *"NÃO use para navegar, chamar API
+   por conector, ou rodar um comando simples"*.
+2. **A tarefa vai completa e autossuficiente.** O Claude Code **não vê a conversa
+   do Grok**: recebe uma string e mais nada. A descrição avisa isso ao modelo, e é
+   por isso que o valor lido da página precisa ir *dentro* do texto delegado.
+3. **A credencial fica em arquivo, não no ambiente do processo.** `agentd` é
+   processo de vida longa; a chave do Claude Code mora em
+   `/workspace/agent/anthropic.env` com permissão `0600` e só entra no ambiente do
+   filho, no momento da chamada. Um teste confere isso pelo efeito, com um
+   executável falso que imprime `$ANTHROPIC_API_KEY`.
+
+**Limites deliberados:** 15 minutos de prazo (trabalho de código lê vários
+arquivos e itera; cortar antes deixaria a árvore pela metade) e 6 000 caracteres
+de relatório de volta (ele entra no prompt de **todas** as iterações seguintes do
+Grok). Estouro de prazo devolve texto avisando que a árvore pode estar
+inconsistente — é o modo de falha mais perigoso, porque o disco fica num estado
+que ninguém escolheu.
+
+Falha do Claude Code volta como **texto**, não derruba a tarefa: quem delegou
+pode tentar outra abordagem, ou pedir take-over.
+
+⚠️ **O `claude` está em `/usr/bin`, que é disco do sistema.** Um `update`
+(§Operação) destrói o droplet e remonta só o volume — o Claude Code **não
+sobrevive** a isso e precisa ser reinstalado. A credencial, essa sim, está no
+volume durável e volta sozinha. Corrigir isto é instalar o Claude Code pelo
+`cloud-init`, e está na lista de pendências.
 
 ---
 
@@ -1656,6 +1855,10 @@ task update       # rebuild preservando o durável
 task reset        # volta ao snapshot
 task destroy      # derruba o droplet (o volume fica, US$ 2/mês)
 
+## o binário do agente
+task deploy           # gate de cobertura + compila + instala em /workspace
+task delegation-test  # prova a delegação com a tarefa mista (web + código)
+
 ## dentro da máquina
 screen-add 2      # cria a tela 2
 screen-remove 2   # derruba (o perfil fica)
@@ -1738,8 +1941,10 @@ motivos, entradas malformadas), e domínio em 100%.
 | Chrome | 152.0.7977.64 |
 | Custo com droplet ligado | US$ 26,00/mês |
 | Custo só do estado | US$ 2,00/mês |
-| Cobertura de testes | 91,7% (domínio 100%) |
+| Cobertura de testes | 91,1% (domínio 100%; `delegate.go` 100%) |
 | Tokens de uma tarefa simples | 723 entrada / 10 saída |
+| Tarefa mista com delegação | ~3 min, 3 chamadas de ferramenta, 2 modelos |
+| Claude Code no droplet | 2.1.251 |
 
 ---
 
@@ -1958,3 +2163,83 @@ servidor.
 **O gatilho para fazer a troca:** precisar de mais de três telas simultâneas, ou
 alguém reclamar de tela cortada por resolução fixa. Aí o ganho deixa de ser
 teórico.
+
+---
+
+# Avaliação do CloakBrowser
+
+Avaliado em **30/08/2026**, a partir do repositório
+<https://github.com/CloakHQ/CloakBrowser>. **Não foi instalado nem executado** —
+a avaliação parou antes disso, e a seção seguinte explica por quê.
+
+### Veredicto
+
+**Não entra.** Resolve um problema que decidimos não ter, e esbarra em dois que
+temos. A decisão não é sobre a qualidade dele: tecnicamente é sério.
+
+### O que ele é
+
+Chromium **recompilado** com 73 patches em C++ — canvas, WebGL, áudio, fontes,
+relato de GPU, WebRTC, timing de rede, sinais de automação — mais um wrapper fino
+em Python/JS com a API do Playwright. Não é injeção de JavaScript nem flag de
+linha de comando: a modificação está na fonte, que é o que faz a evasão
+sobreviver a cada atualização do Chrome.
+
+| | |
+|---|---|
+| Estrelas / forks | 31k / 2,6k |
+| Versão | v0.5.10 (Chromium 151) |
+| reCAPTCHA v3 | 0,9 — contra 0,1 do Playwright puro |
+| Cloudflare Turnstile | passa |
+| Licença do wrapper | MIT |
+| Licença do binário | livre até v146; **v148+ exige assinatura Pro** |
+| Camada grátis | **1 sessão concorrente** |
+
+### Por que não entra — em ordem de peso
+
+**1. Contradiz a regra nº 1 do agente.** A arquitetura inteira deste projeto é
+*bateu numa barreira sensível → `request_takeover` → a pessoa assume*. É a
+cláusula da doc do xAI que mais trabalho deu para virar código executável.
+CloakBrowser é a doutrina oposta: contorne a barreira sem a pessoa.
+
+Instalar os dois na mesma máquina não dá um agente mais capaz — dá um agente com
+duas doutrinas em conflito, e o modelo escolhe a mais fácil. Foi exatamente por
+isso que, ao esbarrar no anti-bot do Mercado Livre, o agente parou e nós
+recusamos trocar user-agent, rotacionar proxy e resolver CAPTCHA.
+
+**2. Quebra o modelo de N telas.** A camada grátis dá **uma** sessão concorrente,
+e a v148+ exige assinatura. Este computador roda **uma tela por tarefa** por
+decisão de arquitetura, e a trava por tela existe justamente para permitir várias
+em paralelo. Bateria no teto na segunda tela.
+
+**3. Não é o gargalo.** O que falta no nosso navegador não é evasão:
+
+| Lacuna real | Onde |
+|---|---|
+| cookies não são compartilhados entre telas | §10 — divergência conhecida da doc |
+| `browser.Execute` em 43,8% de cobertura | é o que puxa o pacote `tools` para 85,5% |
+
+Trocar o binário não conserta nenhuma das duas.
+
+**4. O take-over já resolve o caso legítimo, e melhor.** Você loga à mão uma vez,
+a sessão fica no volume durável, e o agente usa depois — em qualquer visita
+seguinte, sem repetir o login. É a cláusula *"Log in once"* da doc, implementada
+e testada. CloakBrowser resolveria o mesmo caso por um caminho que a doc do Grok
+Bot explicitamente **não** recomenda.
+
+### O que dele seria aproveitável
+
+O **humanize mode** — curva de Bézier no movimento do mouse, atraso por
+caractere na digitação, rolagem com aceleração. Isso não é evasão: é interação
+mais parecida com a de uma pessoa, e serve a qualquer site que quebre com clique
+instantâneo ou preenchimento atômico. Daria para implementar dentro das
+ferramentas `browser_*` sem trocar de binário e sem tocar na doutrina.
+
+Não está feito porque ainda não medimos nada quebrando por causa disso — seria
+solução procurando problema.
+
+### O gatilho para revisitar
+
+Se o objetivo deixar de ser *agente que trabalha sob supervisão* e passar a ser
+*coleta em escala*. Aí a doutrina muda junto, o take-over deixa de fazer sentido,
+e CloakBrowser passa a ser a escolha certa. Mas aí é outro produto.
