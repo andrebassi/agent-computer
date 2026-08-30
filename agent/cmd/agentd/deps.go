@@ -128,7 +128,7 @@ func (d *deps) agentFactory() api.AgentFactory {
 		// Delegação a um agente de código. Os dois não se substituem: este
 		// navega, chama API e sabe parar numa barreira sensível; o outro edita
 		// arquivo e mexe em git.
-		toolset = append(toolset, tools.NewDelegate("/workspace", d.stateDir+"/anthropic.env"))
+		toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", d.stateDir+"/anthropic.env", toolSandbox()))
 
 		// Conectores e habilidades dependem do TEXTO — é por isso que a
 		// montagem é por tarefa, e não uma vez no boot. Um agente montado no

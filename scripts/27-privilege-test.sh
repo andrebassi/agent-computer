@@ -124,14 +124,35 @@ if tryAsModel 'echo AGENTD_TOOL_USER=off >> /etc/agentd/xai.env'; then
 else
   ok "o EnvironmentFile esta fora de alcance"
 fi
-# E, mesmo que estivesse, a ordem das diretivas precisa proteger.
-order="$(agent_ssh "systemctl cat agentd-api 2>/dev/null | grep -n 'EnvironmentFile=\|Environment=AGENTD_TOOL_USER'" | tr -d '\r')"
-fileLine="$(echo "$order" | grep 'EnvironmentFile=' | head -1 | cut -d: -f1)"
-varLine="$(echo "$order" | grep 'Environment=AGENTD_TOOL_USER' | head -1 | cut -d: -f1)"
-if [ -n "$fileLine" ] && [ -n "$varLine" ] && [ "$varLine" -gt "$fileLine" ]; then
-  ok "Environment= vem depois do EnvironmentFile= (a linha fixa vence)"
+# E, mesmo que estivesse, a diretiva precisa proteger -- e o COMO muda com o
+# sistema.
+#
+# No Ubuntu ha um EnvironmentFile, e o que protege e a ORDEM: o systemd faz o
+# ultimo vencer, entao a linha fixa tem de vir depois do arquivo.
+#
+# No NixOS nao existe EnvironmentFile nenhum -- o valor e parte da expressao que
+# cria a unidade. Isso e ESTRITAMENTE MAIS FORTE: nao ha arquivo para
+# sobrescrever, e nao ha ordem para errar. Conferir "ordem" ali reprovaria a
+# configuracao mais segura das duas.
+unitText="$(agent_ssh 'systemctl cat agentd-api 2>/dev/null' | tr -d '\r')"
+if [ "$osName" = "nixos" ]; then
+  if echo "$unitText" | grep -q 'EnvironmentFile='; then
+    fail "o NixOS nao deveria ter EnvironmentFile: ha um arquivo capaz de sobrescrever"
+  else
+    ok "sem EnvironmentFile: o valor esta na propria unidade, nao ha o que sobrescrever"
+  fi
+  echo "$unitText" | grep -q 'AGENTD_TOOL_USER=agent' \
+    && ok "AGENTD_TOOL_USER fixado na unidade" \
+    || fail "AGENTD_TOOL_USER ausente da unidade"
 else
-  fail "ordem errada: EnvironmentFile na linha ${fileLine:-?}, Environment na ${varLine:-?}"
+  order="$(echo "$unitText" | grep -n 'EnvironmentFile=\|Environment=AGENTD_TOOL_USER')"
+  fileLine="$(echo "$order" | grep 'EnvironmentFile=' | head -1 | cut -d: -f1)"
+  varLine="$(echo "$order" | grep 'Environment=AGENTD_TOOL_USER' | head -1 | cut -d: -f1)"
+  if [ -n "$fileLine" ] && [ -n "$varLine" ] && [ "$varLine" -gt "$fileLine" ]; then
+    ok "Environment= vem depois do EnvironmentFile= (a linha fixa vence)"
+  else
+    fail "ordem errada: EnvironmentFile na linha ${fileLine:-?}, Environment na ${varLine:-?}"
+  fi
 fi
 
 echo
@@ -166,8 +187,10 @@ sudoRefused() {
   echo "$output" | grep -qiE 'not allowed to execute|a (terminal|password) is required|Sorry, user'
 }
 # `ufw` so existe no Ubuntu; em NixOS a leitura equivalente e o `nft`.
+# `nft` NAO existe em NixOS com networking.nftables desligado, que e o padrao --
+# o backend e iptables. Testar o comando errado reprova uma maquina correta.
 case "$osName" in
-  nixos)  firewallRead='sudo -n nft list ruleset' ;;
+  nixos)  firewallRead='sudo -n iptables -S' ;;
   *)      firewallRead='sudo -n ufw status' ;;
 esac
 for allowed in 'sudo -n systemctl is-active agentd-api' 'sudo -n systemctl daemon-reload' "$firewallRead" 'sudo -n mount -a'; do

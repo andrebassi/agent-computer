@@ -59,7 +59,7 @@ AGENT_OS=nixos task up     # NixOS declarativo
 | | Ubuntu | NixOS |
 |---|---|---|
 | como é descrito | `cloud-init/user-data.yaml`, 658 linhas | `nixos/host.nix` |
-| como chega | cloud-init imperativo | `nixos-infect` com `NIXOS_IMPORT` |
+| como chega | cloud-init imperativo | instalação sobre o Ubuntu, no lugar |
 | estado | 29 passos de `runcmd` em ordem | declaração |
 | erro de sudoers | descarta o arquivo inteiro **em silêncio** | **não compila** |
 | verificação antes de gastar droplet | YAML + ASCII | `task nixos-check` avalia o sistema **inteiro** |
@@ -112,7 +112,7 @@ token` numa linha que está sintaticamente correta em disco. Custou um
 diagnóstico inteiro nesta sessão.
 
 > 🛑 **`NIXOS_IMPORT`, nunca `NIXOS_CONFIG`.** O guard
-> `[[ -e /etc/nixos/configuration.nix ]] && return 0` do `nixos-infect` aborta a
+> `[[ -e /etc/nixos/configuration.nix ]] && return 0` do instalador aborta a
 > função inteira — pulando também `hardware-configuration.nix` e a configuração
 > de **rede**. Pré-escrever a config faria a máquina subir sem rota.
 

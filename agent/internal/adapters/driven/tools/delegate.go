@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,6 +52,13 @@ type Delegate struct {
 	// workdir é onde o Claude Code roda. Aponta para o workspace durável, e não
 	// para o efêmero, porque o trabalho dele precisa sobreviver ao rebuild.
 	workdir string
+	// sandbox rebaixa o agente de código para um usuário sem acesso ao cofre.
+	//
+	// Vale AQUI tanto quanto na ferramenta de shell, e foi um descuido tê-lo
+	// ligado só lá: o agente de código executa comando arbitrário por desenho.
+	// Sem rebaixamento ele roda como o usuário do serviço — o dono da identidade
+	// age — e uma delegação bastaria para ler o arquivo de senha do cofre.
+	sandbox *Sandbox
 	// envFile guarda a credencial dele. Fica em arquivo, e não no ambiente deste
 	// processo, para a chave não vazar por `ps` nem por dump de memória de um
 	// processo de vida longa.
@@ -109,11 +115,26 @@ type delegateEvent struct {
 // no volume durável — assim os dois ficam juntos e não há um terceiro caminho
 // para alguém configurar errado.
 func NewDelegate(workdir, envFile string) *Delegate {
+	return newDelegate(workdir, envFile, NewSandbox(""))
+}
+
+// NewDelegateSandboxed cria a ferramenta com o agente de código rebaixado.
+//
+// É o construtor de produção. O usuário informado NÃO pode ser o mesmo que roda
+// o agentd — se for, o rebaixamento é nominal e o cofre segue alcançável por
+// uma delegação.
+func NewDelegateSandboxed(workdir, envFile string, sandbox *Sandbox) *Delegate {
+	return newDelegate(workdir, envFile, sandbox)
+}
+
+// newDelegate concentra a montagem, para os dois construtores não divergirem.
+func newDelegate(workdir, envFile string, sandbox *Sandbox) *Delegate {
 	return &Delegate{
 		workdir:   workdir,
 		envFile:   envFile,
 		configDir: filepath.Join(filepath.Dir(envFile), "claude-config"),
 		binary:    "claude",
+		sandbox:   sandbox,
 	}
 }
 
@@ -182,7 +203,7 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	// --output-format json troca texto solto por resultado estruturado. É o que
 	// permite distinguir resposta de recusa, e o que traz custo e sessão — em
 	// texto, os três eram invisíveis.
-	cmd := exec.CommandContext(runCtx, d.binary,
+	cmd := d.sandbox.Command(runCtx, d.binary,
 		"--allowedTools", strings.Join(allowedDelegateTools, ","),
 		"--output-format", "json",
 		"--max-budget-usd", maxDelegateCostUSD,

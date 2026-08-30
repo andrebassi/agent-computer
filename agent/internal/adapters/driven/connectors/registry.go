@@ -107,7 +107,17 @@ func NewRegistry(root string) (*Registry, error) {
 	// O diretório de segredos é fechado ao dono. Não isola agentes entre si —
 	// todos rodam como o mesmo usuário, e a documentação diz que as telas não
 	// são fronteira de segurança —, mas evita leitura por outra conta da máquina.
-	if err := os.Chmod(filepath.Join(root, "secrets"), 0o700); err != nil {
+	//
+	// Falhar aqui NAO derruba o registro, e a diferenca importa: quem nao e dono
+	// do diretorio nao consegue mudar o modo dele, e isso e o esperado depois da
+	// separacao de usuarios -- `secrets` pertence ao `agentd`, e o operador roda
+	// como `agent`.
+	//
+	// Antes era erro fatal, e o efeito era um `-catalog list` (comando de
+	// LEITURA) morrer com "restringindo secrets: permission denied" numa maquina
+	// perfeitamente correta. O modo ja esta certo; quem o ajusta e o dono, no
+	// boot.
+	if err := os.Chmod(filepath.Join(root, "secrets"), 0o700); err != nil && !os.IsPermission(err) {
 		return nil, fmt.Errorf("restringindo secrets: %w", err)
 	}
 	r := &Registry{root: root, connectors: map[string]*loadedConnector{}}

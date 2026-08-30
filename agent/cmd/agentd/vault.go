@@ -162,6 +162,34 @@ func readServeToken(ctx context.Context, stateDir, tokenFile string) (string, st
 	return token, sourceFile, nil
 }
 
+// runVaultCheck confere se o cofre ABRE com a identidade desta máquina.
+//
+// Faz uma LEITURA de verdade, e é isso que distingue esta checagem das outras:
+// abrir o store não decifra nada (o gopass só confere que `.age-recipients`
+// existe), e gravar tampouco — ele cifra para os destinatários que encontrou.
+// Só a leitura exercita a identidade.
+//
+// Devolve erro quando o cofre está órfão, para o script de provisionamento
+// poder decidir recriá-lo. Recriar não perde nada: o cofre é DERIVADO do `pass`,
+// não a origem dos segredos.
+func runVaultCheck(ctx context.Context, stateDir string) error {
+	cfg, err := vaultConfig(stateDir)
+	if err != nil {
+		return err
+	}
+	store, err := vault.OpenWith(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	// A chave do modelo é a que sempre existe num cofre provisionado. Ler
+	// qualquer outra daria o mesmo resultado; esta é a que se pode assumir.
+	if _, err := store.Get(ctx, vaultKeyModelAPI); err != nil {
+		return fmt.Errorf("o cofre nao abre com a identidade desta maquina: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "cofre legivel")
+	return nil
+}
+
 // runVaultInit cria o cofre e grava os segredos lidos da entrada padrão.
 //
 // A criação é em Go, e não em shell, de propósito: o mesmo binário que lê o

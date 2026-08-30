@@ -133,6 +133,36 @@ func TestSandboxDisableRequiresAnExplicitWord(t *testing.T) {
 	}
 }
 
+// A DELEGAÇÃO também é rebaixada, não só o shell.
+//
+// Foi um descuido real: o sandbox entrou na ferramenta de shell e ficou de fora
+// da delegação, então o agente de código rodava como o usuário do serviço — o
+// dono da identidade do cofre. Como ele executa comando arbitrário por desenho,
+// uma delegação bastava para ler o arquivo de senha.
+//
+// Este teste é o que impede a regressão: sem o sandbox no construtor, o comando
+// montado deixa de passar por sudo e ele reprova.
+func TestDelegateIsAlsoDowngraded(t *testing.T) {
+	tool := NewDelegateSandboxed("/workspace", "/workspace/agent/anthropic.env",
+		NewSandbox("outro-usuario"))
+	cmd := tool.sandbox.Command(context.Background(), "claude", "-p", "tarefa")
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "sudo") || !strings.Contains(joined, "-u outro-usuario") {
+		t.Fatalf("a delegação devia ser rebaixada: %s", joined)
+	}
+}
+
+// O construtor simples NÃO rebaixa — e é o de teste, não o de produção.
+//
+// A distinção precisa ser explícita: um construtor que silenciosamente não
+// protege, com nome que não diz isso, é como o descuido acima acontece.
+func TestPlainDelegateConstructorDoesNotDowngrade(t *testing.T) {
+	tool := NewDelegate("/workspace", "/workspace/agent/anthropic.env")
+	if tool.sandbox.Enabled() {
+		t.Fatal("o construtor simples não devia rebaixar")
+	}
+}
+
 // indexOf devolve a posição do primeiro item igual ao procurado, ou -1.
 func indexOf(items []string, wanted string) int {
 	for i, item := range items {

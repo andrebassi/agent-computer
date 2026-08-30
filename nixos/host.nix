@@ -1,8 +1,15 @@
 # Configuracao declarativa do agent-computer em NixOS.
 #
-# Importado pelo nixos-infect via NIXOS_IMPORT, entao o `configuration.nix` e o
-# `hardware-configuration.nix` continuam sendo os que ele gera -- com a rede do
-# DigitalOcean e a chave SSH de root embutidas. Este arquivo NAO os substitui.
+# Importado pelo instalador (nixos-infect) via NIXOS_IMPORT, entao o
+# `configuration.nix` e o `hardware-configuration.nix` continuam sendo os que ele
+# gera -- com a rede do DigitalOcean e a chave SSH de root embutidas. Este
+# arquivo NAO os substitui.
+#
+# O instalador e um script que poe NixOS POR CIMA de um Linux que ja esta
+# rodando: o droplet nasce Ubuntu (unica imagem que o DigitalOcean oferece),
+# ele instala o Nix ali dentro, constroi o sistema a partir deste arquivo,
+# reescreve o boot e reinicia. O sistema de arquivos raiz do Ubuntu e apagado
+# no processo -- por isso o estado que importa mora no volume separado.
 #
 # # Por que existe, se o cloud-init do Ubuntu funciona
 #
@@ -95,8 +102,22 @@ in
   # um `cat` entregaria todos os segredos.
   users.mutableUsers = false;
 
-  users.groups.agent = { };
-  users.groups.agentd = { };
+  # uid e gid FIXOS, e nao os que o sistema escolher.
+  #
+  # O volume duravel e COMPARTILHADO entre os dois caminhos de deploy: a mesma
+  # particao e montada por uma maquina Ubuntu ou por uma NixOS, conforme o
+  # AGENT_OS. Numero de usuario e o que fica gravado no inode -- nome nao fica.
+  #
+  # Medido em 30/08/2026, e custou o provisionamento do cofre: os uid
+  # coincidiram por acaso (1000 e 999 nos dois), mas os gid NAO -- o grupo
+  # `agent` era 1000 no Ubuntu e virou 999 no NixOS, e `agentd` era 988 e virou
+  # 998. O `ls` mostrava o grupo como NUMERO em vez de nome, e o efeito era
+  # `permission denied` num diretorio que parecia perfeitamente correto.
+  #
+  # Os valores abaixo sao os do Ubuntu, porque o volume ja esta gravado com
+  # eles. Mudar qualquer um destes numeros exige um `chown -R` no volume.
+  users.groups.agent = { gid = 1000; };
+  users.groups.agentd = { gid = 988; };
 
   # A chave de root e declarada AQUI, e nao deixada por conta do nixos-infect.
   #
@@ -113,6 +134,7 @@ in
 
   users.users.agentd = {
     isSystemUser = true;
+    uid = 999;
     group = "agentd";
     # Entra no grupo `agent` para escrever no /workspace compartilhado. O cofre
     # e a identidade ficam 0700, sem leitura de grupo: pertencer ao grupo da
@@ -123,6 +145,7 @@ in
 
   users.users.agent = {
     isNormalUser = true;
+    uid = 1000;
     group = "agent";
     home = "/home/agent";
     shell = pkgs.bashInteractive;
@@ -186,8 +209,14 @@ in
           "/run/current-system/sw/bin/systemctl list-timers *"
           "/run/current-system/sw/bin/journalctl -u agentd-api.service *"
           "/run/current-system/sw/bin/journalctl -u agentd-notify.service *"
-          "/run/current-system/sw/bin/mount -a"
-          "/run/current-system/sw/bin/nft list ruleset"
+          # `mount` mora nos WRAPPERS, e nao no perfil do sistema: ele e setuid,
+          # e o NixOS poe binario setuid em /run/wrappers/bin. Apontar para o
+          # perfil produz "sudo: a password is required" num comando permitido.
+          "/run/wrappers/bin/mount -a"
+          # O NixOS usa IPTABLES por padrao; `nft` fica para o caso de
+          # networking.nftables ser ligado. Os dois sao LEITURA pura.
+          "/run/current-system/sw/bin/iptables -S"
+          "/run/current-system/sw/bin/iptables -S *"
           # pkill preso ao agentd: aberto, um `pkill sshd` derruba o acesso.
           "/run/current-system/sw/bin/pkill -9 -f agentd*"
         ];
@@ -243,6 +272,23 @@ in
     "z ${workspace}/agent/connectors 0755 agentd agentd -"
     "z ${workspace}/agent/connectors/secrets 0700 agentd agentd -"
 
+    # `claude` alcancavel pelo PATH.
+    #
+    # O prefixo do npm vive no volume duravel (para sobreviver ao `update`), e
+    # esse caminho nao esta no PATH de ninguem. A ferramenta de delegacao procura
+    # `claude` no PATH -- sem o link ela falha com "executable file not found",
+    # que manda procurar na instalacao em vez de no PATH.
+    #
+    # Aqui e nao num `postStart` do servico: aquele roda como `agent`, que NAO
+    # escreve em /usr/local/bin -- e nao deve mesmo, porque e onde mora o binario
+    # do servico. O tmpfiles roda como root. Medido: o postStart falhou com
+    # "Permission denied" e derrubou o servico inteiro, que ate entao tinha dado
+    # certo.
+    #
+    # `L+` substitui um link que ja exista, para o alvo acompanhar uma
+    # reinstalacao do npm.
+    "L+ /usr/local/bin/claude - - - - ${workspace}/npm/bin/claude"
+
     # Prefixo do npm no volume DURAVEL.
     #
     # Melhoria em relacao ao Ubuntu: la o agente de codigo era instalado no
@@ -279,6 +325,62 @@ in
     '';
   };
 
+  # Normaliza a POSSE do estado depois de montar o volume.
+  #
+  # # Por que nao basta fixar uid e gid
+  #
+  # O volume e compartilhado entre os dois caminhos de deploy, e numero de grupo
+  # e o que fica gravado no inode -- nome nao fica. A fixacao acima faz uma
+  # maquina NOVA nascer com os mesmos numeros do Ubuntu, mas nao conserta um
+  # volume que ja veio gravado com outros: o NixOS PRESERVA o gid de um grupo
+  # que ja existe, e recusa muda-lo num rebuild.
+  #
+  # Medido em 30/08/2026: o `ls` mostrava o grupo como NUMERO em vez de nome
+  # (`drwxr-s--- agentd 1000`), e o efeito era `permission denied` num diretorio
+  # que parecia perfeitamente correto. O cofre nao provisionou por causa disso.
+  #
+  # # Por que `chown -R` e nao uma regra `Z` do tmpfiles
+  #
+  # `Z` recursivo aplicaria o MESMO modo a tudo, e `2750` num arquivo o deixa
+  # executavel. Aqui so a posse e normalizada; o modo continua vindo das regras
+  # `z`, uma por diretorio.
+  #
+  # Nao alcanca /workspace/browser de proposito: sao centenas de megabytes de
+  # perfil do Chrome, ja pertencem a `agent`, e percorre-los a cada boot custaria
+  # segundos sem consertar nada.
+  systemd.services.agent-state-ownership = {
+    description = "Normaliza a posse do estado no volume duravel";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "agentd-api.service" "agentd-vault-passphrase.service" ];
+    unitConfig.RequiresMountsFor = workspace;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [ pkgs.coreutils ];
+    script = ''
+      # Sai em silencio se o volume nao montou: `nofail` permite a maquina subir
+      # sem ele, e nesse caso nao ha estado para normalizar.
+      [ -d ${workspace}/agent ] || exit 0
+      chown -R agentd:agent ${workspace}/agent
+      # O cofre e as regras do agente sao do agentd SOZINHO -- pertencer ao
+      # grupo da acesso ao trabalho, nunca ao segredo nem a propria instrucao.
+      chown -R agentd:agentd ${workspace}/agent/vault ${workspace}/agent/skills ${workspace}/agent/connectors 2>/dev/null || true
+      # api-token e a copia do OPERADOR, e volta a ser dele.
+      #
+      # O servidor le o token do COFRE (`origem=cofre` no log); este arquivo
+      # existe so para o lado cliente, que roda como `agent`. A normalizacao
+      # acima o engolia junto, e o cliente passava a receber "token ausente ou
+      # invalido" -- com o arquivo ali, intacto, e o servico funcionando
+      # perfeitamente.
+      #
+      # Custou cinco falhas em cascata numa suite: uma causa, cinco sintomas em
+      # secoes diferentes.
+      [ -e ${workspace}/agent/api-token ] && chown agent:agent ${workspace}/agent/api-token
+      true
+    '';
+  };
+
   # Marcador que o `agent-status` le para dizer se o estado e duravel.
   systemd.services.agent-volume-marker = {
     description = "Registra se /workspace veio do volume separado";
@@ -311,13 +413,20 @@ in
       User = "agent";
       Group = "agent";
     };
-    path = [ pkgs.nodejs_22 pkgs.curl ];
+    # `path` SUBSTITUI o PATH inteiro em NixOS -- nao acrescenta.
+    #
+    # Com so nodejs e curl a instalacao falhou com `enoent spawn sh ENOENT`: os
+    # scripts de pos-instalacao do npm precisam de um shell, e nao havia
+    # nenhum. O erro nao diz "PATH incompleto", diz que nao achou um arquivo --
+    # e manda procurar no pacote errado.
+    path = [ pkgs.nodejs_22 pkgs.curl pkgs.bash pkgs.coreutils pkgs.gnutar pkgs.gzip ];
     environment.NPM_CONFIG_PREFIX = "${workspace}/npm";
     script = ''
       if [ ! -x ${workspace}/npm/bin/claude ]; then
         npm install -g @anthropic-ai/claude-code || exit 1
       fi
     '';
+
   };
 
   # ---------------------------------------------------------------------------
@@ -507,6 +616,25 @@ in
   # Rede
   # ---------------------------------------------------------------------------
   #
+  # Desfaz a rota IPv6 VAZIA que o instalador gera.
+  #
+  # Ele escreve `defaultGateway6 = { address = ""; }` e uma rota `{ address =
+  # ""; prefixLength = 128; }` mesmo quando o droplet nao tem IPv6 -- e o
+  # resultado e `ip route add "/128"`, que falha com "any valid prefix is
+  # expected".
+  #
+  # A rede IPv4 sobe normalmente, entao a maquina funciona. O custo e outro, e e
+  # o que importa: `systemctl is-system-running` fica em `degraded` PARA SEMPRE.
+  # Um sistema permanentemente degradado nao serve de sinal de saude -- a
+  # proxima falha de verdade se esconde no mesmo ruido, e o
+  # `31-nixos-rebuild.sh` usa exatamente esse sinal para dizer se um deploy deu
+  # certo.
+  #
+  # `eth0` fixo porque e o nome no DigitalOcean; noutro provedor isto precisaria
+  # olhar a interface de verdade.
+  networking.defaultGateway6 = lib.mkForce null;
+  networking.interfaces.eth0.ipv6.routes = lib.mkForce [ ];
+  #
   # Substitui o ufw. Nada alem do SSH entra: as portas de tela (5901, 6081) e a
   # de tarefas (8787) sao alcancadas pelo tunel SSH, nunca pela internet.
   networking.firewall = {
@@ -526,6 +654,33 @@ in
   };
 
   services.tailscale.enable = true;
+
+  # nix-ld: faz binario PRE-COMPILADO de terceiro rodar.
+  #
+  # O agente de codigo vem do npm como executavel ja compilado, ligado
+  # dinamicamente contra a glibc e procurando `/lib64/ld-linux-x86-64.so.2`.
+  # O NixOS nao tem esse caminho -- cada binario aponta para o carregador dentro
+  # do proprio /nix/store -- e a mensagem e literal:
+  #
+  #   Could not start dynamically linked executable: claude
+  #
+  # O `nix-ld` poe um carregador compativel no caminho padrao, so para esse tipo
+  # de programa. E a resposta idiomatica do NixOS para software distribuido em
+  # binario, e nao ha alternativa sem empacotar o agente de codigo como
+  # derivacao -- trabalho a parte, e que teria de acompanhar cada versao dele.
+  #
+  # O binario do `agentd` NAO precisa disto: e Go estatico (CGO_ENABLED=0).
+  programs.nix-ld.enable = true;
+  programs.nix-ld.libraries = with pkgs; [ stdenv.cc.cc.lib zlib openssl ];
+
+  # /usr/local/bin no PATH.
+  #
+  # E onde moram o binario do servico e o link do agente de codigo. O NixOS nao
+  # o inclui por padrao -- o que e coerente com a filosofia dele, e aqui produz
+  # um `claude: command not found` num link que existe e esta correto.
+  environment.extraInit = ''
+    export PATH="$PATH:/usr/local/bin"
+  '';
 
   # ---------------------------------------------------------------------------
   # Pacotes e fontes
@@ -552,7 +707,7 @@ in
   # Versao do estado. NAO acompanha a versao do NixOS: mudar isto sem ler as
   # notas de migracao e como a maioria dos danos silenciosos acontece.
   #
-  # `mkForce` porque o nixos-infect fixa "23.11" na configuration.nix que ele
+  # `mkForce` porque o instalador fixa "23.11" na configuration.nix que ele
   # gera, e duas definicoes de mesma prioridade nao se resolvem sozinhas -- a
   # construcao PARA com "conflicting definition values". Custou uma conversao
   # inteira descobrir; o verificador local passou a replicar o valor dele

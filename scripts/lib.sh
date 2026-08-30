@@ -16,7 +16,7 @@ SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/andrebassi-bb}"
 # Qual sistema o droplet recebe. São DOIS caminhos, e os dois valem.
 #
 #   ubuntu  cloud-init imperativo, 658 linhas — o padrão, e é o verificado
-#   nixos   configuração declarativa em nixos/host.nix, via nixos-infect
+#   nixos   configuração declarativa em nixos/host.nix, instalada sobre o Ubuntu
 #
 # O padrão continua sendo `ubuntu` de propósito: ele é o caminho que já passou
 # pelas três suítes, e mantê-lo intacto é o que torna o NixOS uma escolha em vez
@@ -24,9 +24,13 @@ SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/andrebassi-bb}"
 #
 #   task destroy && AGENT_OS=ubuntu task up
 #
-# ⚠️ A imagem do droplet continua sendo Ubuntu mesmo com `AGENT_OS=nixos`: o
-# nixos-infect converte a máquina em NixOS DEPOIS do primeiro boot. Não trocar
-# DROPLET_IMAGE achando que ajuda — não existe imagem NixOS oficial no DO.
+# ⚠️ A imagem do droplet continua sendo Ubuntu mesmo com `AGENT_OS=nixos`, e
+# isso é deliberado: **não existe imagem NixOS oficial no DigitalOcean**. A
+# máquina nasce Ubuntu e um instalador (`nixos-infect`) põe NixOS por cima, no
+# lugar, ainda no primeiro boot — instala o Nix, constrói o sistema a partir de
+# `nixos/host.nix`, reescreve o boot e reinicia nele.
+#
+# Não trocar DROPLET_IMAGE achando que ajuda: não há para o quê trocar.
 AGENT_OS="${AGENT_OS:-ubuntu}"
 case "$AGENT_OS" in
   ubuntu|nixos) ;;

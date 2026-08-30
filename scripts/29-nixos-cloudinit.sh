@@ -8,10 +8,10 @@
 # verdades: alguem corrige o modulo, esquece a copia, e o droplet novo sobe com
 # a versao velha -- sem erro nenhum, porque as duas sao YAML valido.
 #
-# Gerando na hora, `scripts/30-nixos-check.sh` verifica exatamente o que vai
+# Gerando na hora, `scripts/30-nixos-validate.sh` verifica exatamente o que vai
 # subir.
 #
-# # O que o nixos-infect faz com isto
+# # O que o instalador faz com isto
 #
 # Ele gera `configuration.nix` E `hardware-configuration.nix` E a rede do
 # DigitalOcean, e importa o nosso modulo por NIXOS_IMPORT.
@@ -80,7 +80,7 @@ header = """#cloud-config
 # cloud-init recusa o arquivo INTEIRO em silencio: reporta "status: done", nao
 # instala nada, e o droplet sobe vazio. Ja custou tres droplets.
 #
-# Este arquivo e GERADO por scripts/29-render-nixos-userdata.sh a partir de
+# Este arquivo e GERADO por scripts/29-nixos-cloudinit.sh a partir de
 # nixos/. Nao edite a saida -- edite a origem.
 
 write_files:
@@ -88,7 +88,10 @@ write_files:
 
 runcmd = f"""
 runcmd:
-  # Converte o Ubuntu recem-criado em NixOS, importando o nosso modulo.
+  # Instala NixOS por cima do Ubuntu recem-criado, importando o nosso modulo.
+  #
+  # O script (nixos-infect) poe o Nix na maquina que ja esta rodando, constroi
+  # o sistema a partir do /etc/nixos/host.nix e reinicia nele. Leva 10-20 min.
   #
   # PROVIDER=digitalocean e o que faz o script gerar a configuracao de REDE da
   # plataforma; sem isso a maquina volta do reboot sem rota e inalcancavel.

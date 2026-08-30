@@ -45,7 +45,7 @@ case "$AGENT_OS" in
     echo "montando o cloud-init do NixOS a partir de nixos/"
     USER_DATA="$(mktemp "${TMPDIR:-/tmp}/agent-computer-nixos.XXXXXX.yaml")"
     trap 'rm -f "$USER_DATA"' EXIT
-    "${PROJECT_DIR}/scripts/29-render-nixos-userdata.sh" > "$USER_DATA"
+    "${PROJECT_DIR}/scripts/29-nixos-cloudinit.sh" > "$USER_DATA"
     ;;
 esac
 echo "sistema: $AGENT_OS"

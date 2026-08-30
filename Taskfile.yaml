@@ -109,16 +109,31 @@ tasks:
       - ./scripts/26-setup-vault.sh 2>&1 | tee logs/vault.log
       - ./scripts/23-setup-api-token.sh 2>&1 | tee logs/api-token.log
 
-  nixos-check:
+  nixos:validate:
     desc: 'Avalia a config NixOS no Mac, antes de gastar droplet — sintaxe, ASCII e sistema completo'
     cmds:
       - mkdir -p logs
-      - ./scripts/30-nixos-check.sh 2>&1 | tee logs/nixos-check.log
+      - ./scripts/30-nixos-validate.sh 2>&1 | tee logs/nixos-validate.log
 
-  nixos-userdata:
+  nixos:cloudinit:
     desc: 'Mostra o cloud-init do caminho NixOS, gerado a partir de nixos/'
     cmds:
-      - ./scripts/29-render-nixos-userdata.sh
+      - ./scripts/29-nixos-cloudinit.sh
+
+  e2e:
+    desc: 'Teste ponta a ponta: as costuras entre as três suítes — cofre, delegação, catálogo, estado, contrato'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/32-end-to-end.sh 2>&1 | tee logs/e2e.log
+
+  suites:
+    desc: 'Roda as QUATRO suítes na máquina, em ordem, e falha se qualquer uma falhar'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/08-validate.sh 2>&1 | tee logs/validate.log
+      - ./scripts/27-privilege-test.sh 2>&1 | tee logs/privilege-test.log
+      - ./scripts/25-serve-integration-test.sh 2>&1 | tee logs/serve-test.log
+      - ./scripts/32-end-to-end.sh 2>&1 | tee logs/e2e.log
 
   privilege-test:
     desc: 'Prova adversarial: o modelo não alcança o cofre, não vira root, não troca o binário'

@@ -27,6 +27,20 @@
 # Entao quem cria e o proprio `agentd`: o mesmo binario que le e o que escreve,
 # e o formato nao tem como divergir entre os dois lados.
 #
+# # Por que por ROOT, e nao por `sudo -u agentd`
+#
+# Havia uma regra `agent ALL=(agentd) NOPASSWD: agentd -vault-init*`, e ela foi
+# REMOVIDA de proposito: operador e modelo sao o mesmo usuario `agent`, entao
+# toda concessao dada ao operador e dada ao modelo junto -- e essa deixava o
+# modelo gravar no cofre e cadastrar conector.
+#
+# A autoridade do operador e a chave SSH de root, que existe so no Mac. O
+# `agentd_run` entra por ela e desce para `agentd` com `setpriv`, sem depender
+# de linha nenhuma em sudoers.
+#
+# A inconsistencia so apareceu na maquina NixOS: o droplet Ubuntu ainda tinha o
+# sudoers antigo aplicado a mao, entao o script funcionava ali por acidente.
+#
 # # Os valores nunca aparecem
 #
 # Nem em argumento (`ps` mostra a linha de comando de qualquer processo a
@@ -94,6 +108,35 @@ case "$prep" in
 esac
 
 echo
+echo "2b/4 o cofre existente ainda ABRE com a identidade desta maquina?"
+# Detecta o cofre ORFAO -- store cifrado para uma chave que nao existe mais.
+#
+# Acontece toda vez que a maquina e reconstruida: a identidade age mora em
+# /etc/agentd, no disco do SISTEMA, e isso e deliberado (e o que faz a foto do
+# volume ser inutil sozinha). O store fica no volume, sobrevive, e passa a estar
+# cifrado para uma chave destruida.
+#
+# O sintoma engana: `-vault-init` GRAVA sem reclamar (ele cifra para os
+# destinatarios que achou no store), e so a LEITURA falha -- o servico sobe e
+# morre com "cofre ilegivel". Escrever num cofre que nao se le e o pior desfecho
+# possivel, porque parece ter funcionado.
+#
+# Por isso a checagem e `-vault-check`, que LE de verdade. A primeira versao
+# usava `-catalog list` e passava sempre: aquele comando lista conectores e nao
+# toca no cofre -- uma verificacao que nao exercita o que verifica.
+#
+# Recriar nao perde nada: o cofre e DERIVADO do `pass`, nao a origem. Todo
+# segredo daqui e regravado logo abaixo.
+if ! agentd_run '-vault-check -state /workspace/agent' >/dev/null 2>&1; then
+  echo "  o cofre nao abre com a identidade atual (maquina reconstruida)"
+  echo "  recriando -- o conteudo vem do pass, entao nada se perde"
+  root_ssh 'rm -rf /workspace/agent/vault && install -d -m 0700 -o agentd -g agentd /workspace/agent/vault'
+  echo "  cofre zerado"
+else
+  echo "  ✅ o cofre existente abre normalmente"
+fi
+
+echo
 echo "3/4 gravando no cofre"
 # O laco monta `chave=valor` linha a linha e entrega TUDO de uma vez pela
 # entrada padrao. Uma invocacao por segredo custaria uma derivacao scrypt cada,
@@ -104,13 +147,13 @@ echo "3/4 gravando no cofre"
     passEntry="${pair#*=}"
     printf '%s=%s\n' "$vaultKey" "$(timeout 25s pass show "$passEntry" | head -1)"
   done
-} | agent_ssh 'sudo -n -u agentd /usr/local/bin/agentd -vault-init -state /workspace/agent' 2>&1 | sed 's/^/  /'
+} | agentd_run '-vault-init -state /workspace/agent' 2>&1 | sed 's/^/  /'
 
 echo
 echo "4/4 conferindo pelo EFEITO"
 # O `-catalog list` sobe o binario inteiro sem chamar o modelo nem tocar em tela
 # nenhuma. Se o cofre estiver ilegivel, ele reclama aqui.
-agent_ssh 'sudo -n -u agentd /usr/local/bin/agentd -catalog list 2>&1 | head -5' | sed 's/^/  /'
+agentd_run '-catalog list 2>&1 | head -5' | sed 's/^/  /'
 echo
 # A prova que importa: o MODELO nao le a identidade. Roda como `agent`, que e
 # exatamente o usuario para quem as ferramentas dele caem.

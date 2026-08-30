@@ -95,13 +95,16 @@ osName="$(agent_os)"
 echo "  sistema: $osName"
 case "$osName" in
   nixos)
-    # NixOS usa nftables por networking.firewall. A tabela se chama `nixos-fw`.
-    rules="$(agent_ssh 'sudo -n nft list ruleset 2>/dev/null')"
-    echo "$rules" | grep -q 'nixos-fw' && ok "firewall do NixOS ativo" || fail "nftables sem a tabela nixos-fw"
+    # O NixOS usa IPTABLES por padrao (networking.nftables fica desligado), e
+    # cria uma CHAIN chamada `nixos-fw`. Procurar uma tabela nftables reprovava
+    # uma maquina com o firewall perfeitamente ativo -- o teste olhava o lugar
+    # errado, nao o sistema.
+    rules="$(agent_ssh 'sudo -n iptables -S 2>/dev/null')"
+    echo "$rules" | grep -q 'nixos-fw' && ok "firewall do NixOS ativo (chain nixos-fw)" || fail "iptables sem a chain nixos-fw"
     # A prova que importa e a mesma nos dois sistemas: as portas de tela e a de
     # tarefas NAO podem estar liberadas de fora.
     for p in 5901 6081 9221 8787; do
-      if echo "$rules" | grep -qE "dport ($p|\{[^}]*\b$p\b)"; then
+      if echo "$rules" | grep -qE "dport[s]? $p( |,|$)|--dport $p( |$)"; then
         fail "firewall permite $p de fora"
       else
         ok "firewall nao expoe $p"

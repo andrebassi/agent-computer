@@ -74,6 +74,7 @@ func main() {
 		tokenFile    = flag.String("token-file", "", "arquivo do token da API (padrão: <state>/api-token)")
 		taskTimeout  = flag.Duration("task-timeout", 2*time.Hour, "teto de tempo de uma tarefa")
 		vaultInit    = flag.Bool("vault-init", false, "cria o cofre e grava segredos lidos como chave=valor na entrada padrão")
+		vaultCheck   = flag.Bool("vault-check", false, "confere se o cofre ABRE com a identidade desta máquina")
 	)
 	flag.Parse()
 
@@ -82,7 +83,8 @@ func main() {
 		stateDir: *stateDir, model: *modelName, webhook: *webhookURL,
 		listen: *listenAddr, tokenFile: *tokenFile, taskTimeout: *taskTimeout,
 		resume: *resume, abandon: *abandon, catalog: *catalog, drain: *notifyDrain,
-		serve: *serveHTTP, vaultInit: *vaultInit, rest: flag.Args(),
+		serve: *serveHTTP, vaultInit: *vaultInit, vaultCheck: *vaultCheck,
+		rest: flag.Args(),
 	}
 	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
@@ -102,7 +104,7 @@ type runOptions struct {
 	listen, tokenFile               string
 	taskTimeout                     time.Duration
 	resume, abandon, catalog, drain bool
-	serve, vaultInit                bool
+	serve, vaultInit, vaultCheck    bool
 	rest                            []string
 }
 
@@ -117,6 +119,22 @@ func run(o runOptions) error {
 	// pedir a credencial que ainda não há onde guardar.
 	if o.vaultInit {
 		return runVaultInit(context.Background(), stateDir, os.Stdin)
+	}
+
+	// Conferir o cofre vem ANTES de qualquer coisa que dependa dele, e e uma
+	// operacao de LEITURA de verdade.
+	//
+	// Existe porque nenhum outro comando prova que o cofre abre: `-catalog list`
+	// so lista conectores, e `-vault-init` GRAVA sem reclamar mesmo num cofre
+	// que nao se le -- ele cifra para os destinatarios que achou no store.
+	//
+	// O estado que isso detecta acontece toda reconstrucao da maquina: a
+	// identidade age mora no disco do SISTEMA (deliberado -- e o que faz a foto
+	// do volume ser inutil sozinha), o store fica no volume e sobrevive, e passa
+	// a estar cifrado para uma chave destruida. Escrever num cofre ilegivel e o
+	// pior desfecho possivel, porque parece ter funcionado.
+	if o.vaultCheck {
+		return runVaultCheck(context.Background(), stateDir)
 	}
 
 	// Gerenciar catálogo é operação local, como abandonar: nada de modelo nem
@@ -220,7 +238,7 @@ func run(o runOptions) error {
 	// chama API e sabe parar numa barreira sensível; o outro edita arquivo, mexe
 	// em git e abre subagentes. A ferramenta existe pelo caso misto — "leia o
 	// site e ajuste o código conforme" —, que nenhum dos dois faz sozinho.
-	toolset = append(toolset, tools.NewDelegate("/workspace", stateDir+"/anthropic.env"))
+	toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", stateDir+"/anthropic.env", toolSandbox()))
 
 	// Conectores anexados com "@" no texto da tarefa. Só os pedidos entram:
 	// a descrição de cada ferramenta vai no prompt a cada iteração, então

@@ -98,7 +98,7 @@ fi
 
 echo
 echo "4/4 avaliacao do sistema completo (x86_64-linux)"
-# O stub REPLICA o que o nixos-infect gera, e nao apenas o minimo para avaliar.
+# O stub REPLICA o que o instalador gera, e nao apenas o minimo para avaliar.
 #
 # Custou um droplet descobrir a diferenca. O stub antigo tinha so boot e raiz, e
 # aprovou uma configuracao que a maquina recusou:
@@ -107,12 +107,12 @@ echo "4/4 avaliacao do sistema completo (x86_64-linux)"
 #   - In `/etc/nixos/host.nix`: "25.11"
 #   - In `/etc/nixos/configuration.nix`: "23.11"
 #
-# O infect fixa 23.11 na config dele. Avaliar o nosso modulo SOZINHO nunca veria
+# O instalador fixa 23.11 na config dele. Avaliar o nosso modulo SOZINHO nunca veria
 # o conflito -- ele so existe quando os dois se encontram. Um verificador que
 # nao reproduz o vizinho aprova o que a maquina reprova, que e o pior tipo de
 # verde.
 #
-# Os valores abaixo vem do proprio nixos-infect (funcao makeConf).
+# Os valores abaixo vem do proprio instalador (funcao makeConf do nixos-infect).
 evalOut="$(timeout 900s nix --extra-experimental-features 'nix-command flakes' \
   eval --impure --raw --expr "
 let
