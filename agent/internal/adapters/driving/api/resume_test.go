@@ -64,14 +64,14 @@ func TestResumeDistinguishesNotFoundFromNotBlocked(t *testing.T) {
 		t.Fatalf("esperava ErrTaskNotFound, veio %v", err)
 	}
 
-	rodando, err := domain.NewTask("t2", 1, "faça algo", time.Now())
+	runningTask, err := domain.NewTask("t2", 1, "faça algo", time.Now())
 	if err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	if err := rodando.Start(time.Now()); err != nil {
+	if err := runningTask.Start(time.Now()); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	store.tasks["t2"] = rodando
+	store.tasks["t2"] = runningTask
 	if _, err := sup.Resume(context.Background(), "t2", ""); !errors.Is(err, service.ErrNotBlocked) {
 		t.Fatalf("esperava ErrNotBlocked, veio %v", err)
 	}
@@ -163,9 +163,9 @@ func TestBusyErrorMessage(t *testing.T) {
 	if message == "" {
 		t.Fatal("a mensagem não pode ser vazia")
 	}
-	for _, esperado := range []string{"t-abc", "3"} {
-		if !strings.Contains(message, esperado) {
-			t.Fatalf("a mensagem devia conter %q: %q", esperado, message)
+	for _, expected := range []string{"t-abc", "3"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("a mensagem devia conter %q: %q", expected, message)
 		}
 	}
 }

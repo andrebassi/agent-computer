@@ -64,18 +64,18 @@ func TestBlockedMessageAsksForAction(t *testing.T) {
 		BlockReason: BlockTwoFactor, BlockDetail: "código do app"}
 	event, _ := NewTaskEvent(task, "", baseTime)
 
-	msg := event.Message()
-	if !strings.Contains(msg, "PRECISA DE VOCÊ") {
-		t.Fatalf("a mensagem devia pedir ação: %q", msg)
+	message := event.Message()
+	if !strings.Contains(message, "PRECISA DE VOCÊ") {
+		t.Fatalf("a mensagem devia pedir ação: %q", message)
 	}
-	if !strings.Contains(msg, BlockTwoFactor.Description()) {
-		t.Fatalf("devia reaproveitar a descrição do motivo: %q", msg)
+	if !strings.Contains(message, BlockTwoFactor.Description()) {
+		t.Fatalf("devia reaproveitar a descrição do motivo: %q", message)
 	}
-	if !strings.Contains(msg, "código do app") {
-		t.Fatalf("o detalhe devia aparecer: %q", msg)
+	if !strings.Contains(message, "código do app") {
+		t.Fatalf("o detalhe devia aparecer: %q", message)
 	}
-	if !strings.Contains(msg, "3") {
-		t.Fatalf("a tela devia aparecer: %q", msg)
+	if !strings.Contains(message, "3") {
+		t.Fatalf("a tela devia aparecer: %q", message)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestBlockedMessageWithoutDetail(t *testing.T) {
 // branco — pior que um aviso feio, porque não dá para diagnosticar.
 func TestMessageHandlesUnknownKind(t *testing.T) {
 	event := TaskEvent{Screen: 4, Kind: TaskEventKind("espécie-nova")}
-	if msg := event.Message(); !strings.Contains(msg, "espécie-nova") {
-		t.Fatalf("espécie desconhecida devia aparecer no texto: %q", msg)
+	if message := event.Message(); !strings.Contains(message, "espécie-nova") {
+		t.Fatalf("espécie desconhecida devia aparecer no texto: %q", message)
 	}
 }

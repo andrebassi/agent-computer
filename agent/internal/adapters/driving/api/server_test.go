@@ -73,8 +73,8 @@ func TestCreateTaskReturns201(t *testing.T) {
 func TestAuthenticationRejectsBadTokens(t *testing.T) {
 	handler, _, _ := newServer(t, &fakeRunner{})
 	cases := []struct {
-		nome      string
-		cabecalho string
+		name      string
+		header string
 	}{
 		{"sem cabeçalho", ""},
 		{"token errado", "Bearer token-errado-mas-do-tamanho-certo!!"},
@@ -82,10 +82,10 @@ func TestAuthenticationRejectsBadTokens(t *testing.T) {
 		{"token vazio", "Bearer "},
 	}
 	for _, c := range cases {
-		t.Run(c.nome, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(`{"prompt":"x"}`))
-			if c.cabecalho != "" {
-				req.Header.Set("Authorization", c.cabecalho)
+			if c.header != "" {
+				req.Header.Set("Authorization", c.header)
 			}
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
@@ -133,7 +133,7 @@ func TestBusyScreenReturns409WithHint(t *testing.T) {
 	if body["task_id"] != decode(t, firstResponse)["id"] {
 		t.Fatalf("devia nomear a tarefa que segura a tela: %v", body)
 	}
-	if dica, _ := body["hint"].(string); !strings.Contains(dica, "resume") || !strings.Contains(dica, "abandon") {
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "resume") || !strings.Contains(hint, "abandon") {
 		t.Fatalf("a dica devia dizer o que fazer: %v", body["hint"])
 	}
 	close(runner.release)
@@ -147,9 +147,9 @@ func TestBadRequestsReturn400(t *testing.T) {
 		"prompt vazio":  `{"prompt":"","screen":1}`,
 		"tela inválida": `{"prompt":"x","screen":99}`,
 	}
-	for nome, corpo := range cases {
-		t.Run(nome, func(t *testing.T) {
-			rec := do(t, handler, http.MethodPost, "/tasks", corpo)
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := do(t, handler, http.MethodPost, "/tasks", body)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("esperava 400, veio %d: %s", rec.Code, rec.Body.String())
 			}
@@ -215,12 +215,12 @@ func TestResumeStatusCodes(t *testing.T) {
 		t.Fatalf("inexistente devia ser 404, veio %d", rec.Code)
 	}
 
-	rodando, err := domain.NewTask("t2", 1, "faça algo", time.Now())
+	runningTask, err := domain.NewTask("t2", 1, "faça algo", time.Now())
 	if err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
-	_ = rodando.Start(time.Now())
-	store.tasks["t2"] = rodando
+	_ = runningTask.Start(time.Now())
+	store.tasks["t2"] = runningTask
 	if rec := do(t, handler, http.MethodPost, "/tasks/t2/resume", `{}`); rec.Code != http.StatusConflict {
 		t.Fatalf("não bloqueada devia ser 409, veio %d", rec.Code)
 	}

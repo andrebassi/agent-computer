@@ -96,15 +96,15 @@ func TestTrimNeverLeavesOrphanToolResult(t *testing.T) {
 func TestTrimIsNoopBelowLimit(t *testing.T) {
 	c := NewConversation("t1", "sistema")
 	c.AddUser("uma só")
-	antes := len(c.Messages)
+	before := len(c.Messages)
 
 	c.Trim(10)
-	if len(c.Messages) != antes {
-		t.Fatalf("histórico abaixo do limite não devia mudar: %d -> %d", antes, len(c.Messages))
+	if len(c.Messages) != before {
+		t.Fatalf("histórico abaixo do limite não devia mudar: %d -> %d", before, len(c.Messages))
 	}
 	c.Trim(1)
-	if len(c.Messages) != antes {
-		t.Fatalf("limite menor que 2 devia ser ignorado: %d -> %d", antes, len(c.Messages))
+	if len(c.Messages) != before {
+		t.Fatalf("limite menor que 2 devia ser ignorado: %d -> %d", before, len(c.Messages))
 	}
 }
 
@@ -136,13 +136,13 @@ func TestCompactKeepsSystemAndRecentMessages(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		conv.AddUser(fmt.Sprintf("pedido %d", i))
 	}
-	antes := len(conv.Messages)
+	before := len(conv.Messages)
 
 	if !conv.Compact() {
 		t.Fatal("devia ter comprimido")
 	}
-	if len(conv.Messages) >= antes {
-		t.Fatalf("não encurtou: %d -> %d", antes, len(conv.Messages))
+	if len(conv.Messages) >= before {
+		t.Fatalf("não encurtou: %d -> %d", before, len(conv.Messages))
 	}
 	if conv.Messages[0].Role != RoleSystem || conv.Messages[0].Content != "regras invioláveis" {
 		t.Fatalf("a instrução de sistema devia ser preservada: %+v", conv.Messages[0])
@@ -153,9 +153,9 @@ func TestCompactKeepsSystemAndRecentMessages(t *testing.T) {
 		t.Fatalf("devia haver um marcador de usuário: %+v", conv.Messages[1])
 	}
 	// As mensagens RECENTES são as que ficam — é o trabalho em curso.
-	ultima := conv.Messages[len(conv.Messages)-1]
-	if ultima.Content != "pedido 9" {
-		t.Fatalf("a última mensagem devia sobreviver, veio %q", ultima.Content)
+	last := conv.Messages[len(conv.Messages)-1]
+	if last.Content != "pedido 9" {
+		t.Fatalf("a última mensagem devia sobreviver, veio %q", last.Content)
 	}
 }
 
@@ -187,8 +187,8 @@ func TestCompactNeverLeavesOrphanToolResult(t *testing.T) {
 // Se devolvesse true, quem chamou refaria a chamada com o mesmo histórico,
 // receberia o mesmo erro, e "comprime e tenta de novo" viraria laço infinito.
 func TestCompactRefusesWhenAlreadyMinimal(t *testing.T) {
-	casos := []struct {
-		nome  string
+	cases := []struct {
+		name  string
 		monta func() *Conversation
 	}{
 		{"só sistema", func() *Conversation { return NewConversation("t1", "regras") }},
@@ -204,15 +204,15 @@ func TestCompactRefusesWhenAlreadyMinimal(t *testing.T) {
 			return c
 		}},
 	}
-	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
+	for _, caso := range cases {
+		t.Run(caso.name, func(t *testing.T) {
 			conv := caso.monta()
-			antes := len(conv.Messages)
+			before := len(conv.Messages)
 			if conv.Compact() {
 				t.Fatal("não devia comprimir uma conversa mínima")
 			}
-			if len(conv.Messages) != antes {
-				t.Fatalf("mexeu no histórico mesmo recusando: %d -> %d", antes, len(conv.Messages))
+			if len(conv.Messages) != before {
+				t.Fatalf("mexeu no histórico mesmo recusando: %d -> %d", before, len(conv.Messages))
 			}
 		})
 	}
@@ -249,8 +249,8 @@ func TestSkipOrphanToolResults(t *testing.T) {
 		{Role: RoleSystem}, {Role: RoleUser}, {Role: RoleAssistant},
 		{Role: RoleTool}, {Role: RoleTool}, {Role: RoleUser},
 	}
-	casos := []struct {
-		nome string
+	cases := []struct {
+		name string
 		from int
 		want int
 	}{
@@ -259,8 +259,8 @@ func TestSkipOrphanToolResults(t *testing.T) {
 		{"índice negativo é tratado como zero", -3, 0},
 		{"além do fim devolve o fim", 99, 99},
 	}
-	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
+	for _, caso := range cases {
+		t.Run(caso.name, func(t *testing.T) {
 			if got := skipOrphanToolResults(messages, caso.from); got != caso.want {
 				t.Fatalf("de %d esperava %d, veio %d", caso.from, caso.want, got)
 			}
@@ -292,8 +292,8 @@ func TestLastAnswerSkipsToolOnlyTurns(t *testing.T) {
 // Nenhum texto de preenchimento entra aqui: um "tarefa concluída" inventado
 // apareceria no aviso de quem recebe como se o agente tivesse dito algo.
 func TestLastAnswerIsEmptyWhenNothingWasSaid(t *testing.T) {
-	casos := []struct {
-		nome  string
+	cases := []struct {
+		name  string
 		monta func() *Conversation
 	}{
 		{"conversa nova", func() *Conversation { return NewConversation("t1", "regras") }},
@@ -304,8 +304,8 @@ func TestLastAnswerIsEmptyWhenNothingWasSaid(t *testing.T) {
 			return c
 		}},
 	}
-	for _, caso := range casos {
-		t.Run(caso.nome, func(t *testing.T) {
+	for _, caso := range cases {
+		t.Run(caso.name, func(t *testing.T) {
 			if got := caso.monta().LastAnswer(); got != "" {
 				t.Fatalf("esperava vazio, veio %q", got)
 			}

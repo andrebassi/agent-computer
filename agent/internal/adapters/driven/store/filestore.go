@@ -91,8 +91,8 @@ func (s *FileStore) ListActiveTasks(_ context.Context) ([]*domain.Task, error) {
 			continue
 		}
 		if task.Active() {
-			copia := task
-			active = append(active, &copia)
+			copied := task
+			active = append(active, &copied)
 		}
 	}
 	return active, nil

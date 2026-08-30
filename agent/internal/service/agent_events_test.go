@@ -60,8 +60,8 @@ func TestBlockPublishesEvent(t *testing.T) {
 		t.Fatalf("motivo ou tela errados: %+v", event)
 	}
 	// A mensagem tem de dizer que precisa de alguém, senão ninguém age.
-	if msg := event.Message(); msg == "" || !strings.Contains(msg, "PRECISA DE VOCÊ") {
-		t.Fatalf("a mensagem devia pedir ação: %q", msg)
+	if message := event.Message(); message == "" || !strings.Contains(message, "PRECISA DE VOCÊ") {
+		t.Fatalf("a mensagem devia pedir ação: %q", message)
 	}
 }
 

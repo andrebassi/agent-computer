@@ -79,11 +79,11 @@ func NewTaskEvent(t *Task, summary string, now time.Time) (TaskEvent, bool) {
 func (e TaskEvent) Message() string {
 	switch e.Kind {
 	case EventBlocked:
-		texto := fmt.Sprintf("tela %d PRECISA DE VOCÊ: %s", e.Screen, e.Reason.Description())
+		text := fmt.Sprintf("tela %d PRECISA DE VOCÊ: %s", e.Screen, e.Reason.Description())
 		if e.Detail != "" {
-			texto += " — " + e.Detail
+			text += " — " + e.Detail
 		}
-		return texto
+		return text
 	case EventFinished:
 		if e.Summary != "" {
 			return fmt.Sprintf("tela %d concluiu: %s", e.Screen, e.Summary)

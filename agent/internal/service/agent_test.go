@@ -300,13 +300,13 @@ func TestToolFailureDoesNotKillTheTask(t *testing.T) {
 	if conv == nil {
 		t.Fatal("conversa não foi gravada")
 	}
-	var achou bool
+	var found bool
 	for _, m := range conv.Messages {
 		if strings.Contains(m.Content, "comando explodiu") {
-			achou = true
+			found = true
 		}
 	}
-	if !achou {
+	if !found {
 		t.Fatal("o erro da ferramenta devia aparecer no histórico")
 	}
 }
@@ -327,13 +327,13 @@ func TestUnknownToolIsReportedBackToTheModel(t *testing.T) {
 		t.Fatalf("Run falhou: %v", err)
 	}
 	conv := store.conversations["t1"]
-	var achou bool
+	var found bool
 	for _, m := range conv.Messages {
 		if strings.Contains(m.Content, "ferramenta desconhecida") {
-			achou = true
+			found = true
 		}
 	}
-	if !achou {
+	if !found {
 		t.Fatal("o histórico devia informar que a ferramenta não existe")
 	}
 }
@@ -483,13 +483,13 @@ func TestStatusIsPushedToTheScreen(t *testing.T) {
 	if len(screen.statuses) < 2 {
 		t.Fatalf("a tela devia receber status em vários passos, veio %d", len(screen.statuses))
 	}
-	var mostrouFerramenta bool
+	var showedToolName bool
 	for _, s := range screen.statuses {
 		if strings.Contains(s, "shell") {
-			mostrouFerramenta = true
+			showedToolName = true
 		}
 	}
-	if !mostrouFerramenta {
+	if !showedToolName {
 		t.Fatal("o status devia dizer qual ferramenta está em uso")
 	}
 }

@@ -195,12 +195,12 @@ func TestBackoffWakesOnCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	inicio := time.Now()
+	startedAt := time.Now()
 	err := sleepCtx(ctx, 10*time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("esperava context.Canceled, veio %v", err)
 	}
-	if decorrido := time.Since(inicio); decorrido > 2*time.Second {
+	if decorrido := time.Since(startedAt); decorrido > 2*time.Second {
 		t.Fatalf("dormiu %v — não acordou com o cancelamento", decorrido)
 	}
 }

@@ -38,7 +38,7 @@ Regras invioláveis:
 1. NUNCA tente contornar senha, verificação em duas etapas, CAPTCHA, confirmação
    de pagamento ou verificação de identidade. Ao encontrar qualquer uma delas,
    chame request_takeover e PARE. Uma pessoa vai resolver e devolver o controle.
-2. NUNCA peça senha nem código de uso único em texto na conversa.
+2. NUNCA peça senha nem código de uso único em text na conversa.
 3. Guarde trabalho durável em /workspace. O diretório /scratch é apagado a cada
    reconstrução do computador, junto com pacotes instalados manualmente.
 4. Este computador é compartilhado por todos os agentes da conta: arquivos e
@@ -49,7 +49,7 @@ Regras invioláveis:
    por conector e rodar comando simples você faz melhor e mais barato sozinho.
 6. Quando a tarefa estiver concluída, responda sem chamar ferramenta nenhuma.
 
-Trabalhe em passos pequenos e confira o resultado de cada um antes de seguir.`
+Trabalhe em passos pequenos e confira o resultado de cada um before de seguir.`
 
 // exitFailure é o código de saída quando a execução falha.
 const exitFailure = 1

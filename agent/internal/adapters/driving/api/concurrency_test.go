@@ -22,31 +22,31 @@ func TestConcurrentStartsOnlyOneWins(t *testing.T) {
 	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
 
 	const attempts = 8
-	var aceitos, recusados atomic.Int32
-	var largada sync.WaitGroup
-	var terminou sync.WaitGroup
-	largada.Add(1)
+	var accepted, recusados atomic.Int32
+	var startSignal sync.WaitGroup
+	var finished sync.WaitGroup
+	startSignal.Add(1)
 
 	for i := 0; i < attempts; i++ {
-		terminou.Add(1)
+		finished.Add(1)
 		go func() {
-			defer terminou.Done()
+			defer finished.Done()
 			// Todas partem juntas: é o que torna a corrida provável.
-			largada.Wait()
+			startSignal.Wait()
 			if _, err := sup.Start(context.Background(), 1, "faça algo"); err != nil {
 				if errors.Is(err, domain.ErrScreenBusy) {
 					recusados.Add(1)
 				}
 				return
 			}
-			aceitos.Add(1)
+			accepted.Add(1)
 		}()
 	}
-	largada.Done()
-	terminou.Wait()
+	startSignal.Done()
+	finished.Wait()
 
-	if aceitos.Load() != 1 {
-		t.Fatalf("exatamente uma devia entrar, entraram %d", aceitos.Load())
+	if accepted.Load() != 1 {
+		t.Fatalf("exatamente uma devia entrar, entraram %d", accepted.Load())
 	}
 	if recusados.Load() != attempts-1 {
 		t.Fatalf("as outras %d deviam ser recusadas por tela ocupada, foram %d",
@@ -62,7 +62,7 @@ func TestBusyErrorNamesTheTaskHoldingTheScreen(t *testing.T) {
 	runner := &fakeRunner{release: make(chan struct{})}
 	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
 
-	primeira, err := sup.Start(context.Background(), 2, "primeira")
+	first, err := sup.Start(context.Background(), 2, "primeira")
 	if err != nil {
 		t.Fatalf("Start falhou: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestBusyErrorNamesTheTaskHoldingTheScreen(t *testing.T) {
 	if !errors.As(err, &busy) {
 		t.Fatalf("esperava BusyError, veio %v", err)
 	}
-	if busy.Task.ID != primeira.ID {
+	if busy.Task.ID != first.ID {
 		t.Fatalf("devia nomear a tarefa que segura a tela: %s", busy.Task.ID)
 	}
 	// E continua reconhecível pelo erro de domínio, para quem checa por tipo.

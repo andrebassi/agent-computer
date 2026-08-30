@@ -225,16 +225,16 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	// O relatório de custo vai junto SEMPRE, inclusive no sucesso: sem ele, o
 	// preço de delegar só aparece na fatura, e a decisão de delegar de novo é
 	// tomada sem saber quanto custou a anterior.
-	custo := fmt.Sprintf("[%d turno(s), US$ %.4f]", result.NumTurns, result.CostUSD)
+	cost := fmt.Sprintf("[%d turno(s), US$ %.4f]", result.NumTurns, result.CostUSD)
 
 	if result.IsError || runErr != nil {
-		motivo := result.Subtype
-		if motivo == "" {
-			motivo = fmt.Sprintf("%v", runErr)
+		reason := result.Subtype
+		if reason == "" {
+			reason = fmt.Sprintf("%v", runErr)
 		}
 		return &ports.ToolResult{
 			Output: fmt.Sprintf("o agente de código falhou (%s) %s:\n%s",
-				motivo, custo, truncateDelegateOutput(result.Result)),
+				reason, cost, truncateDelegateOutput(result.Result)),
 			Failed: true,
 		}, nil
 	}
@@ -243,7 +243,7 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	if output == "" {
 		output = "(o agente de código terminou sem dizer nada)"
 	}
-	return &ports.ToolResult{Output: truncateDelegateOutput(output) + "\n\n" + custo}, nil
+	return &ports.ToolResult{Output: truncateDelegateOutput(output) + "\n\n" + cost}, nil
 }
 
 // parseDelegateResult acha o evento `result` na saída de `--output-format json`.

@@ -385,9 +385,9 @@ func TestDelegateEnvFileOverridesInheritedVariables(t *testing.T) {
 
 	// A configuração precisa cair no volume durável, ao lado da credencial, e
 	// não no `~/.claude` padrão, que morre no rebuild.
-	esperado := filepath.Join(dir, "claude-config")
-	if !strings.Contains(result.Output, "config:"+esperado) {
-		t.Fatalf("o config devia apontar para %q: %q", esperado, result.Output)
+	expected := filepath.Join(dir, "claude-config")
+	if !strings.Contains(result.Output, "config:"+expected) {
+		t.Fatalf("o config devia apontar para %q: %q", expected, result.Output)
 	}
 }
 

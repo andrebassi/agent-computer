@@ -44,46 +44,46 @@ func TestReadTokenTrimsTrailingNewline(t *testing.T) {
 // shell, navegador e credenciais.
 func TestReadTokenFailsClosed(t *testing.T) {
 	cases := []struct {
-		nome     string
-		prepara  func(*testing.T) string
-		esperado error
+		name     string
+		setup  func(*testing.T) string
+		expected error
 	}{
 		{
-			nome:     "caminho vazio",
-			prepara:  func(*testing.T) string { return "" },
-			esperado: ErrTokenMissing,
+			name:     "caminho vazio",
+			setup:  func(*testing.T) string { return "" },
+			expected: ErrTokenMissing,
 		},
 		{
-			nome:     "arquivo ausente",
-			prepara:  func(t *testing.T) string { return filepath.Join(t.TempDir(), "sumido") },
-			esperado: ErrTokenMissing,
+			name:     "arquivo ausente",
+			setup:  func(t *testing.T) string { return filepath.Join(t.TempDir(), "sumido") },
+			expected: ErrTokenMissing,
 		},
 		{
-			nome:     "legível por outros",
-			prepara:  func(t *testing.T) string { return writeToken(t, testToken, 0o644) },
-			esperado: ErrTokenLoose,
+			name:     "legível por outros",
+			setup:  func(t *testing.T) string { return writeToken(t, testToken, 0o644) },
+			expected: ErrTokenLoose,
 		},
 		{
-			nome:     "legível pelo grupo",
-			prepara:  func(t *testing.T) string { return writeToken(t, testToken, 0o640) },
-			esperado: ErrTokenLoose,
+			name:     "legível pelo grupo",
+			setup:  func(t *testing.T) string { return writeToken(t, testToken, 0o640) },
+			expected: ErrTokenLoose,
 		},
 		{
-			nome:     "curto demais",
-			prepara:  func(t *testing.T) string { return writeToken(t, "curto", 0o600) },
-			esperado: ErrTokenShort,
+			name:     "curto demais",
+			setup:  func(t *testing.T) string { return writeToken(t, "curto", 0o600) },
+			expected: ErrTokenShort,
 		},
 		{
-			nome:     "vazio",
-			prepara:  func(t *testing.T) string { return writeToken(t, "", 0o600) },
-			esperado: ErrTokenShort,
+			name:     "vazio",
+			setup:  func(t *testing.T) string { return writeToken(t, "", 0o600) },
+			expected: ErrTokenShort,
 		},
 	}
 	for _, c := range cases {
-		t.Run(c.nome, func(t *testing.T) {
-			_, err := ReadToken(c.prepara(t))
-			if !errors.Is(err, c.esperado) {
-				t.Fatalf("esperava %v, veio %v", c.esperado, err)
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ReadToken(c.setup(t))
+			if !errors.Is(err, c.expected) {
+				t.Fatalf("esperava %v, veio %v", c.expected, err)
 			}
 		})
 	}
