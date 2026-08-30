@@ -90,9 +90,10 @@ func (f *fakeScreen) ClearTakeover(_ context.Context, _ int) error {
 
 // fakeStore guarda tarefas e conversas em memória.
 type fakeStore struct {
-	tasks         map[string]*domain.Task
-	conversations map[string]*domain.Conversation
-	saveErr       error
+	tasks           map[string]*domain.Task
+	conversations   map[string]*domain.Conversation
+	saveErr         error
+	conversationErr error
 }
 
 // newFakeStore devolve um armazenamento vazio pronto para uso.
@@ -135,6 +136,9 @@ func (f *fakeStore) ActiveTaskOnScreen(_ context.Context, screen int) (*domain.T
 // código que esqueceu de gravar — foi exatamente o que aconteceu, e um canário
 // pegou o teste aprovando com a gravação removida.
 func (f *fakeStore) SaveConversation(_ context.Context, c *domain.Conversation) error {
+	if f.conversationErr != nil {
+		return f.conversationErr
+	}
 	snapshot := &domain.Conversation{
 		TaskID:   c.TaskID,
 		Messages: append([]domain.Message(nil), c.Messages...),

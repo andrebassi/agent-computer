@@ -122,6 +122,41 @@ func TestLockFileRecordsTheOwner(t *testing.T) {
 	}
 }
 
+// Diretório impossível de criar precisa falhar na construção.
+//
+// Sem isso, o erro só apareceria na primeira tentativa de tomar a tela, e
+// pareceria tela ocupada em vez de problema de disco.
+func TestNewFileLockFailsOnUnusablePath(t *testing.T) {
+	arquivo := filepath.Join(t.TempDir(), "bloqueio")
+	if err := os.WriteFile(arquivo, []byte("x"), 0o644); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	if _, err := NewFileLock(filepath.Join(arquivo, "travas")); err == nil {
+		t.Fatal("caminho inutilizável devia falhar na construção")
+	}
+}
+
+// Arquivo de trava que não pode ser aberto produz erro próprio, distinto de
+// tela ocupada — são causas diferentes e pedem ações diferentes.
+func TestAcquireFailsWhenLockFileCannotBeOpened(t *testing.T) {
+	dir := t.TempDir()
+	l, err := NewFileLock(dir)
+	if err != nil {
+		t.Fatalf("NewFileLock falhou: %v", err)
+	}
+	// Um diretório no lugar do arquivo de trava impede a abertura.
+	if err := os.MkdirAll(filepath.Join(dir, "screen-5.lock"), 0o755); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	_, err = l.Acquire(context.Background(), 5, "t1")
+	if err == nil {
+		t.Fatal("arquivo de trava inacessível devia falhar")
+	}
+	if errors.Is(err, domain.ErrScreenBusy) {
+		t.Fatalf("não é tela ocupada, é falha de abertura: %v", err)
+	}
+}
+
 // O diretório é criado na construção, senão a primeira tarefa falharia num
 // computador recém-reconstruído.
 func TestNewFileLockCreatesDirectory(t *testing.T) {

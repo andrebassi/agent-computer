@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -36,6 +37,33 @@ func TestPromptRefusesWithoutTerminal(t *testing.T) {
 	}
 	if req.Fulfilled {
 		t.Fatal("o pedido não devia ficar marcado como atendido")
+	}
+}
+
+// A pergunta precisa dizer O QUÊ e PARA ONDE, além da tela.
+//
+// O destino é o item que não pode faltar: sem ele, um agente comprometido
+// poderia pedir "a senha do painel" e mandá-la para outro lugar, e quem digita
+// não teria como perceber. Este teste trava esse conteúdo.
+func TestPromptMessageShowsWhatAndWhere(t *testing.T) {
+	req, err := domain.NewSecretRequest("s1", "senha do painel", "painel.exemplo.com")
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	msg := promptMessage(7, req)
+	for _, esperado := range []string{"tela 7", "senha do painel", "painel.exemplo.com"} {
+		if !strings.Contains(msg, esperado) {
+			t.Fatalf("a pergunta devia conter %q: %q", esperado, msg)
+		}
+	}
+	// A promessa também é dita a quem digita, não só cumprida no código.
+	if !strings.Contains(msg, "NÃO vai para o modelo") {
+		t.Fatalf("a pergunta devia afirmar que o valor não vai ao modelo: %q", msg)
+	}
+	// Não pode haver quebra de linha no fim: o cursor fica na mesma linha do
+	// pedido, que é como um prompt de senha se comporta.
+	if strings.HasSuffix(msg, "\n") {
+		t.Fatal("a pergunta não devia terminar em quebra de linha")
 	}
 }
 

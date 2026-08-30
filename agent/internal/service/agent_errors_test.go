@@ -161,6 +161,47 @@ func TestFinalAssistantMessageIsPersisted(t *testing.T) {
 	}
 }
 
+// A retomada também respeita o teto de iterações.
+//
+// Um agente que volta do take-over e entra em ciclo queimaria token do mesmo
+// jeito que na primeira execução — o limite não pode valer só no Run.
+func TestResumeStopsAtIterationLimit(t *testing.T) {
+	agent, task, _, _, model := blockedAgent(t, nil)
+
+	// A partir daqui o modelo pede ferramenta para sempre.
+	loop := make([]ports.Completion, maxIterations+3)
+	for i := range loop {
+		loop[i] = ports.Completion{ToolCalls: []domain.ToolCall{{ID: "c", Name: "request_takeover", Arguments: "{}"}}}
+	}
+	model.responses = loop
+	model.calls = 0
+	// A ferramenta passa a devolver resultado comum, sem bloquear: é o que
+	// mantém o laço girando até bater o teto.
+	agent.tools["request_takeover"] = &fakeTool{name: "request_takeover", result: ports.ToolResult{Output: "de novo"}}
+
+	if err := agent.Resume(context.Background(), task, "resolvido"); !errors.Is(err, ErrMaxIterations) {
+		t.Fatalf("esperava ErrMaxIterations, veio %v", err)
+	}
+}
+
+// Falha ao gravar a conversa interrompe o laço.
+//
+// Seguir adiante deixaria o histórico em disco divergindo do que o modelo está
+// vendo, e uma retomada depois carregaria um estado que nunca existiu.
+func TestRunStopsWhenConversationCannotBeSaved(t *testing.T) {
+	store := newFakeStore()
+	store.conversationErr = errors.New("disco cheio")
+	agent := newAgent(&fakeModel{}, nil, &fakeScreen{}, store, &fakeLock{})
+
+	task, err := domain.NewTask("t1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if err := agent.Run(context.Background(), task); err == nil {
+		t.Fatal("falha ao gravar a conversa devia interromper")
+	}
+}
+
 // Conversa já existente é reaproveitada: recomeçar do zero perderia o trabalho
 // feito antes de uma queda do processo.
 func TestRunReusesExistingConversation(t *testing.T) {

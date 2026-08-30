@@ -130,6 +130,12 @@ func run(screenNumber int, prompt, taskID, note, stateDir, modelName string, res
 		tools.NewTakeover(),
 	}
 
+	// Ferramentas de navegador: é o que permite ao agente PILOTAR o Chrome da
+	// própria tela, e não apenas tê-lo por perto. Elas falam com a porta de
+	// depuração local, que nunca sai de 127.0.0.1 — a porta dá controle total do
+	// navegador, incluindo ler cookie de sessão.
+	toolset = append(toolset, tools.NewBrowserTools(stateDir+"/screenshots")...)
+
 	// Conectores anexados com "@" no texto da tarefa. Só os pedidos entram:
 	// a descrição de cada ferramenta vai no prompt a cada iteração, então
 	// oferecer o catálogo inteiro custaria token em toda chamada e daria ao

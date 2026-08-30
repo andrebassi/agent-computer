@@ -40,6 +40,23 @@ func NewTerminalPrompter() *TerminalPrompter {
 // que é exatamente o caminho pelo qual segredo vaza. Melhor recusar e explicar.
 var ErrNotATerminal = errors.New("sem terminal interativo para pedir o segredo com segurança")
 
+// promptMessage monta o que aparece na tela ao pedir o valor.
+//
+// É função separada porque o CONTEÚDO da pergunta é a parte que importa e a que
+// erra: sem o destino, um agente comprometido poderia pedir "a senha do painel"
+// e mandá-la para outro lugar, e a pessoa não teria como perceber antes de
+// digitar. A leitura em si depende de um terminal e não se testa em unidade;
+// esta parte sim.
+func promptMessage(screen int, req *domain.SecretRequest) string {
+	return fmt.Sprintf(
+		"\n┌─ o agente da tela %d precisa de um valor sigiloso\n"+
+			"│  o quê   : %s\n"+
+			"│  destino : %s\n"+
+			"│  o valor NÃO vai para o modelo nem para o histórico\n"+
+			"└─ digite (não aparece na tela): ",
+		screen, req.Label, req.Destination)
+}
+
 // Prompt mostra o que se pede e para onde vai, e lê o valor com o eco desligado.
 //
 // Mostrar o DESTINO não é enfeite: sem ele, um agente comprometido poderia pedir
@@ -51,11 +68,7 @@ func (p *TerminalPrompter) Prompt(_ context.Context, screen int, req *domain.Sec
 		return "", ErrNotATerminal
 	}
 
-	fmt.Fprintf(p.out, "\n┌─ o agente da tela %d precisa de um valor sigiloso\n", screen)
-	fmt.Fprintf(p.out, "│  o quê   : %s\n", req.Label)
-	fmt.Fprintf(p.out, "│  destino : %s\n", req.Destination)
-	fmt.Fprintf(p.out, "│  o valor NÃO vai para o modelo nem para o histórico\n")
-	fmt.Fprintf(p.out, "└─ digite (não aparece na tela): ")
+	fmt.Fprint(p.out, promptMessage(screen, req))
 
 	raw, err := term.ReadPassword(fd)
 	fmt.Fprintln(p.out)

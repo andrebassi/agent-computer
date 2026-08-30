@@ -257,6 +257,52 @@ func TestWriteIsAtomicAndLeavesNoTempFile(t *testing.T) {
 	}
 }
 
+// Caminho impossível precisa falhar na construção, e não na primeira gravação.
+func TestNewFileStoreFailsOnUnusablePath(t *testing.T) {
+	arquivo := filepath.Join(t.TempDir(), "bloqueio")
+	if err := os.WriteFile(arquivo, []byte("x"), 0o644); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	if _, err := NewFileStore(filepath.Join(arquivo, "estado")); err == nil {
+		t.Fatal("caminho inutilizável devia falhar na construção")
+	}
+}
+
+// Gravação impossível precisa produzir erro, e não perder o estado em silêncio.
+func TestSaveTaskFailsWhenDirectoryDisappears(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore falhou: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remoção falhou: %v", err)
+	}
+	task, err := domain.NewTask("t1", 1, "faça algo", storeTime)
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if err := s.SaveTask(context.Background(), task); err == nil {
+		t.Fatal("gravação impossível devia falhar")
+	}
+}
+
+// Conversa corrompida precisa falhar alto: recomeçar em silêncio perderia o
+// contexto do trabalho já feito.
+func TestLoadConversationFailsOnCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore falhou: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversations", "t1.json"), []byte("{quebrado"), 0o644); err != nil {
+		t.Fatalf("escrita falhou: %v", err)
+	}
+	if _, err := s.LoadConversation(context.Background(), "t1"); err == nil {
+		t.Fatal("conversa corrompida devia produzir erro")
+	}
+}
+
 // Diretório inexistente é criado na construção, senão a primeira gravação
 // falharia num computador recém-reconstruído.
 func TestNewFileStoreCreatesDirectories(t *testing.T) {

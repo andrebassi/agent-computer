@@ -341,20 +341,14 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
       e resolução dinâmica que o Xvfb recusa. Decisão registrada: **não trocar agora**,
       porque nada está limitando; gatilho é precisar de mais de três telas
 
-### A lacuna funcional, e é a maior
+- [x] ~~O agente não pilota o navegador~~ — **fechado**. Seis ferramentas falam
+      CDP com `127.0.0.1:922N`: `browser_navigate`, `browser_read`,
+      `browser_links`, `browser_click`, `browser_fill` e `browser_screenshot`.
 
-- [ ] **O agente não pilota o navegador.** Há `shell`, `request_takeover` e os
-      conectores. O Chrome está de pé e a porta de depuração aberta em
-      `127.0.0.1:922N`, mas **nenhuma ferramenta as usa** — a tela serve para a
-      pessoa assumir e assistir, não para o agente navegar.
-
-      Consequência prática: tudo que a documentação descreve sobre navegar em
-      site, logar e clicar depende hoje de *você* fazer na tela. O agente resolve
-      o que couber em API e linha de comando.
-
-      Fechar isso é acrescentar uma ferramenta que fale CDP com a porta local —
-      navegar, clicar, ler o DOM, capturar tela. O caminho está aberto e o
-      protocolo é o mesmo que o Claude in Chrome usa; falta o código.
+      Provado contra sites reais: o agente abriu `example.com`, leu a página,
+      clicou em "Learn more" e reportou o destino. E diante de `github.com/login`
+      ele navegou, leu, **preencheu o usuário** e parou pedindo take-over — que é
+      a cláusula da documentação funcionando por inteiro.
 
 ### A pendência que não é técnica
 
