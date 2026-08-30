@@ -143,10 +143,7 @@ func loadManifest(path string) (*loadedConnector, error) {
 	}
 	ops := make([]domain.ConnectorOperation, 0, len(m.Operations))
 	for _, op := range m.Operations {
-		schema := string(op.Schema)
-		if schema == "" {
-			schema = `{"type":"object","properties":{}}`
-		}
+		schema := defaultedSchema(op.Schema)
 		ops = append(ops, domain.ConnectorOperation{
 			Name: op.Name, Description: op.Description, Schema: schema,
 		})

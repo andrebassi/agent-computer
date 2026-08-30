@@ -35,6 +35,22 @@ type httpTool struct {
 	client        *http.Client
 }
 
+// defaultedSchema devolve o esquema da operação, ou um esquema vazio válido.
+//
+// Trata "null" além de vazio, e isso não é preciosismo: um campo json.RawMessage
+// ausente vira o texto "null" depois de passar por Marshal e Unmarshal, que é o
+// que acontece com todo manifesto gravado no catálogo. Sem esta checagem a
+// ferramenta é anunciada com "parameters": null, a API rejeita, e o conector
+// inteiro para de funcionar — com o erro apontando para o lugar errado.
+// Descoberto por teste, não por leitura.
+func defaultedSchema(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return `{"type":"object","properties":{}}`
+	}
+	return s
+}
+
 // newHTTPTool monta a ferramenta de uma operação.
 func newHTTPTool(lc *loadedConnector, op ManifestOperation, secretPath string) *httpTool {
 	return &httpTool{
@@ -50,10 +66,7 @@ func newHTTPTool(lc *loadedConnector, op ManifestOperation, secretPath string) *
 // Spec descreve a ferramenta para o modelo, com o nome no formato
 // "conector.operação".
 func (h *httpTool) Spec() ports.ToolSpec {
-	schema := string(h.operation.Schema)
-	if schema == "" {
-		schema = `{"type":"object","properties":{}}`
-	}
+	schema := defaultedSchema(h.operation.Schema)
 	return ports.ToolSpec{
 		Name:        h.connectorName + "." + h.operation.Name,
 		Description: h.operation.Description,

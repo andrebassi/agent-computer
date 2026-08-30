@@ -1,0 +1,45 @@
+{
+  "name": "github",
+  "description": "Trabalha com issues e repositórios do GitHub pela API, em vez de clicar pelo site",
+  "base_url": "https://api.github.com",
+  "auth": {
+    "type": "bearer",
+    "secret_ref": "github-token"
+  },
+  "operations": [
+    {
+      "name": "list_issues",
+      "description": "Lista as issues de um repositório. Use state=open para as abertas.",
+      "method": "GET",
+      "path": "/repos/{owner}/{repo}/issues",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "owner": {"type": "string", "description": "Dono do repositório"},
+          "repo": {"type": "string", "description": "Nome do repositório"},
+          "state": {"type": "string", "enum": ["open", "closed", "all"]},
+          "per_page": {"type": "integer", "description": "Quantas por página, até 100"}
+        },
+        "required": ["owner", "repo"]
+      }
+    },
+    {
+      "name": "create_issue",
+      "description": "Abre uma issue nova num repositório.",
+      "method": "POST",
+      "path": "/repos/{owner}/{repo}/issues",
+      "body_params": ["title", "body", "labels"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "owner": {"type": "string"},
+          "repo": {"type": "string"},
+          "title": {"type": "string", "description": "Título da issue"},
+          "body": {"type": "string", "description": "Corpo em Markdown"},
+          "labels": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["owner", "repo", "title"]
+      }
+    }
+  ]
+}

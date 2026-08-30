@@ -94,14 +94,40 @@ type TaskRequest struct {
 	Skills []string
 }
 
-// mentionPattern casa "@nome" e "/nome" apenas quando o marcador começa o texto
-// ou vem logo depois de um espaço.
+// mentionPattern casa "@nome" e "/nome" quando o marcador começa o texto ou vem
+// logo depois de um espaço, capturando também o que segue o nome sem espaço.
 //
-// A âncora é o que evita os dois falsos positivos que importam: um endereço de
-// e-mail e um caminho de arquivo. Sem ela, pedir ao agente que grave algo em
-// /workspace anexaria uma habilidade chamada "workspace" e removeria o caminho
-// do texto — quebrando a tarefa em silêncio.
-var mentionPattern = regexp.MustCompile(`(^|\s)([@/])([a-zA-Z0-9_-]{1,48})\b`)
+// A âncora à esquerda protege endereços de e-mail. O grupo à direita existe
+// para proteger CAMINHOS DE ARQUIVO, e essa parte não pode ser feita só com a
+// expressão: o Go usa RE2, que não tem lookahead negativo. Por isso o resto é
+// capturado e julgado em looksLikePath.
+//
+// A proteção é obrigatória, e não um refinamento: sem ela, pedir ao agente que
+// grave algo em /workspace/projects anexaria uma habilidade chamada "workspace"
+// E removeria o caminho do texto — quebrando a tarefa em silêncio, do jeito mais
+// difícil de diagnosticar. Um teste cobre exatamente este caso, e ele falhou na
+// primeira versão desta expressão.
+var mentionPattern = regexp.MustCompile(`(^|\s)([@/])([a-zA-Z0-9_-]{1,48})(\S*)`)
+
+// looksLikePath diz se o que segue o nome indica que aquilo era um caminho de
+// arquivo, e não um marcador.
+//
+// Dois sinais bastam: continuar com barra (/workspace/projects) ou com uma
+// extensão (/saida.txt). Pontuação de fim de frase — "siga /release." — não
+// conta como extensão, porque depois do ponto não vem letra.
+func looksLikePath(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	if strings.HasPrefix(rest, "/") {
+		return true
+	}
+	if strings.HasPrefix(rest, ".") && len(rest) > 1 {
+		next := rest[1]
+		return (next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z')
+	}
+	return false
+}
 
 // ParseTaskRequest separa os marcadores do texto da tarefa.
 //
@@ -115,7 +141,12 @@ func ParseTaskRequest(text string) TaskRequest {
 
 	cleaned := mentionPattern.ReplaceAllStringFunc(text, func(match string) string {
 		parts := mentionPattern.FindStringSubmatch(match)
-		prefix, marker, name := parts[1], parts[2], parts[3]
+		prefix, marker, name, rest := parts[1], parts[2], parts[3], parts[4]
+
+		// Era um caminho de arquivo, não um marcador: devolve intacto.
+		if looksLikePath(rest) {
+			return match
+		}
 		switch marker {
 		case "@":
 			if !seenConnectors[name] {
@@ -129,8 +160,9 @@ func ParseTaskRequest(text string) TaskRequest {
 			}
 		}
 		// O espaço que precedia o marcador é preservado, senão palavras vizinhas
-		// grudariam uma na outra ao remover o marcador do meio da frase.
-		return prefix
+		// grudariam ao remover o marcador do meio da frase. O que vinha depois
+		// do nome sem espaço (pontuação, por exemplo) também volta.
+		return prefix + rest
 	})
 
 	// Espaços duplicados sobram onde os marcadores saíram.
