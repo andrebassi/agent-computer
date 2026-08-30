@@ -81,6 +81,13 @@ var (
 	ErrScreenBusy = errors.New("a tela já tem uma tarefa ativa")
 	// ErrInvalidReason cobre BlockReason fora da lista da documentação.
 	ErrInvalidReason = errors.New("motivo de bloqueio inválido")
+	// ErrInvalidTask marca pedido malformado de criação de tarefa.
+	//
+	// É sentinela, e não erro anônimo, porque quem recebe precisa distinguir
+	// "quem pediu errou" de "nós falhamos" — pela porta HTTP isso é a diferença
+	// entre 400 e 500. Comparar a mensagem para decidir seria acoplar o
+	// adaptador ao texto, que muda.
+	ErrInvalidTask = errors.New("pedido de tarefa inválido")
 )
 
 // Task é uma unidade de trabalho numa tela.
@@ -103,13 +110,13 @@ type Task struct {
 // forma de um serviço que não sobe.
 func NewTask(id string, screen int, prompt string, now time.Time) (*Task, error) {
 	if id == "" {
-		return nil, errors.New("id da tarefa vazio")
+		return nil, fmt.Errorf("%w: id da tarefa vazio", ErrInvalidTask)
 	}
 	if screen < 1 || screen > 9 {
-		return nil, fmt.Errorf("tela %d fora do intervalo 1..9", screen)
+		return nil, fmt.Errorf("%w: tela %d fora do intervalo 1..9", ErrInvalidTask, screen)
 	}
 	if prompt == "" {
-		return nil, errors.New("prompt vazio")
+		return nil, fmt.Errorf("%w: prompt vazio", ErrInvalidTask)
 	}
 	return &Task{
 		ID:        id,

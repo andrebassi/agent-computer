@@ -135,8 +135,16 @@ func (s *Supervisor) Start(ctx context.Context, screenNumber int, prompt string)
 		return nil, err
 	}
 
+	// A cópia é feita ANTES de disparar a goroutine, e a ordem é o ponto: depois
+	// do spawn a corrida já começou, porque a goroutine muta o original no
+	// instante seguinte enquanto quem chamou o serializa para a resposta.
+	//
+	// Duas mãos no mesmo objeto, sem sincronização. O detector de corrida pegou
+	// exatamente isto; em produção o sintoma seria uma resposta com o estado
+	// meio escrito, não um erro.
+	snapshot := *task
 	s.spawn(task, runner)
-	return task, nil
+	return &snapshot, nil
 }
 
 // screenIsFree confere as três fontes de ocupação, todas sob o mesmo mutex.
@@ -258,8 +266,10 @@ func (s *Supervisor) Resume(ctx context.Context, taskID, note string) (*domain.T
 	if err != nil {
 		return nil, err
 	}
+	// Cópia antes do disparo, pelo mesmo motivo do Start.
+	snapshot := *task
 	s.spawnResume(task, runner, note)
-	return task, nil
+	return &snapshot, nil
 }
 
 // spawnResume põe a retomada para rodar. Chamado com o mutex tomado.
