@@ -1,0 +1,106 @@
+version: '3'
+
+# `cmd | tee` devolve o codigo de saida do tee, que e sempre 0 — sem pipefail
+# toda task passa verde mesmo com o script quebrado. Medido: o primeiro
+# `task up` saiu rc=0 sem ter criado droplet nenhum.
+set: [pipefail]
+
+# Agent computer — desktop virtual persistente no DigitalOcean.
+# Todo comando registra saída em logs/, conforme a regra de logging do workspace.
+
+vars:
+  LOG: '{{.TASK}}.log'
+
+tasks:
+  default:
+    desc: Lista as tasks
+    cmds: [task -l]
+
+  check:
+    desc: Confere binários, token, chave SSH e latência antes de gastar
+    cmds:
+      - ./scripts/00-check-prereqs.sh 2>&1 | tee logs/check.log
+
+  up:
+    desc: Cria o droplet e espera o cloud-init terminar
+    cmds:
+      - ./scripts/01-create.sh 2>&1 | tee logs/create.log
+      - ./scripts/02-wait-ready.sh 2>&1 | tee logs/wait.log
+      - ./scripts/03-status.sh 2>&1 | tee logs/status.log
+      - ./scripts/08-validate.sh 2>&1 | tee logs/validate.log
+
+  validate:
+    desc: Validação ponta a ponta — units, portas, firewall, X, Chrome, noVNC, pixel
+    cmds:
+      - ./scripts/08-validate.sh 2>&1 | tee logs/validate.log
+
+  status:
+    desc: Estado do droplet e dos serviços da tela
+    cmds:
+      - ./scripts/03-status.sh 2>&1 | tee logs/status.log
+
+  open:
+    desc: Abre a tela do agente no navegador local, por túnel SSH
+    cmds:
+      - ./scripts/06-open.sh 2>&1 | tee logs/open.log
+
+  ssh:
+    desc: Shell no droplet como usuário agent
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        ip="$(droplet_ip)"
+        [ -z "$ip" ] && { echo "droplet nao existe"; exit 1; }
+        ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=accept-new "agent@${ip}"
+
+  persist-test:
+    desc: Reinicia o droplet e prova que serviços e sessão do navegador sobrevivem
+    cmds:
+      - ./scripts/09-persistence-test.sh 2>&1 | tee logs/persistence.log
+
+  snapshot:
+    desc: Snapshot do droplet (o "Update/Reset" da doc do Grok)
+    cmds:
+      - ./scripts/04-snapshot.sh 2>&1 | tee logs/snapshot.log
+
+  restore:
+    desc: 'Restaura de snapshot. Uso: task restore -- --latest'
+    cmds:
+      - ./scripts/05-restore.sh {{.CLI_ARGS}} 2>&1 | tee logs/restore.log
+
+  logs:
+    desc: Log do cloud-init dentro do droplet (diagnóstico de boot)
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'sudo cloud-init status --long; echo; sudo tail -60 /var/log/cloud-init-output.log' 2>&1 | tee logs/cloud-init.log
+
+  restart:
+    desc: Reinicia os serviços da tela (Xvfb, VNC, noVNC, Chrome)
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'sudo systemctl restart xvfb openbox x11vnc novnc chrome && sleep 3 && agent-status' 2>&1 | tee logs/restart.log
+
+  cost:
+    desc: Custo corrente do droplet e dos snapshots
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        echo "droplet $DROPLET_SIZE: US\$ 24,00/mes (US\$ 0,03571/h, cobranca por segundo)"
+        echo
+        echo "snapshots (US\$ 0,06/GB/mes):"
+        doctl compute snapshot list --resource droplet --format Name,SizeGigaBytes 2>/dev/null | grep -E "Name|agent-computer" || echo "  nenhum"
+
+  destroy:
+    desc: Destrói o droplet (pede confirmação digitada)
+    cmds:
+      - ./scripts/07-destroy.sh 2>&1 | tee logs/destroy.log

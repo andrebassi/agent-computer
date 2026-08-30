@@ -1,0 +1,231 @@
+#cloud-config
+# ============================================================================
+# ESTE ARQUIVO E ASCII PURO, DE PROPOSITO. NAO REINTRODUZIR ACENTOS.
+#
+# Medido em 29/08/2026: o DigitalOcean corrompe user_data com bytes nao-ASCII
+# por dupla codificacao UTF-8, no caminho API -> ConfigDrive. Um "acessivel"
+# sai daqui como C3 AD e chega no droplet como C3 83 C2 AD. O byte C2 80 que
+# o travessao duplo-codificado gera e um caractere de controle C1, e o
+# cloud-init RECUSA o arquivo inteiro por causa dele.
+#
+# A recusa e silenciosa: o droplet reporta "status: done", nao instala nada, e
+# o motivo fica so nos recoverable_errors, que saem no stderr.
+#
+# Testado e reproduzido em: doctl 1.145.0, doctl 1.167.0, e chamada direta a
+# API REST com jq (payload provado byte-identico na origem). Os tres corrompem
+# igual, entao a causa NAO e o cliente.
+#
+# A documentacao com acentuacao correta, em portugues, esta no README.md.
+# ============================================================================
+# Provisionamento do agent computer: desktop virtual persistente com navegador,
+# shell e workspace, acessivel por tunel SSH (nenhuma porta grafica exposta).
+# Espelha o modelo do Grok Bot Computer: tela por agente, sessao de browser que
+# sobrevive ao desligamento da maquina local, e handoff humano pela mesma tela.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  # Servidor X virtual e gerenciador de janelas minimo -- sem ambiente desktop
+  # completo, que so consumiria RAM que o Chrome vai querer.
+  - xvfb
+  - x11vnc
+  - openbox
+  - novnc
+  - websockify
+  - xdotool          # automacao de teclado/mouse no X, util ao agente
+  - scrot            # captura de tela por linha de comando
+  - x11-utils
+  # Fontes: sem elas, site real renderiza com caixas no lugar do texto.
+  - fonts-liberation
+  - fonts-noto
+  - fonts-noto-color-emoji
+  - fonts-dejavu-core
+  # Ferramentas de trabalho
+  - git
+  - curl
+  - jq
+  - tmux
+  - htop
+  - unzip
+  - ca-certificates
+  - gnupg
+
+users:
+  - name: agent
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    # Sem ssh_authorized_keys aqui de proposito: lista vazia reprova no schema
+    # do cloud-init ("[] is too short"). A chave e copiada de /root/.ssh pelo
+    # runcmd, ja que o DigitalOcean a injeta em root no momento da criacao.
+
+write_files:
+  # --- Servidor X virtual -----------------------------------------------
+  # Resolucao fixa em 1920x1080: o mesmo canvas dos decks do dono, e evita
+  # depender de redimensionamento dinamico (que o x11vnc nao entrega bem).
+  - path: /etc/systemd/system/xvfb.service
+    content: |
+      [Unit]
+      Description=Servidor X virtual (tela do agente)
+      After=network.target
+
+      [Service]
+      User=agent
+      ExecStart=/usr/bin/Xvfb :1 -screen 0 1920x1080x24 -ac -nolisten tcp
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Gerenciador de janelas -------------------------------------------
+  - path: /etc/systemd/system/openbox.service
+    content: |
+      [Unit]
+      Description=Gerenciador de janelas Openbox
+      After=xvfb.service
+      Requires=xvfb.service
+
+      [Service]
+      User=agent
+      Environment=DISPLAY=:1
+      ExecStart=/usr/bin/openbox --sm-disable
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Servidor VNC ------------------------------------------------------
+  # -localhost e a trava de seguranca: o VNC nao escuta na interface publica.
+  # Quem chega precisa antes ter passado pelo SSH (mesma chave da conta DO).
+  - path: /etc/systemd/system/x11vnc.service
+    content: |
+      [Unit]
+      Description=Servidor VNC da tela do agente
+      After=openbox.service
+      Requires=xvfb.service
+
+      [Service]
+      User=agent
+      Environment=DISPLAY=:1
+      ExecStart=/usr/bin/x11vnc -display :1 -localhost -nopw -forever -shared -rfbport 5900 -noxdamage
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Ponte VNC para o navegador ---------------------------------------
+  # noVNC serve a tela como pagina web; tambem so em 127.0.0.1, alcancavel
+  # apenas pelo tunel SSH aberto pelo operador.
+  - path: /etc/systemd/system/novnc.service
+    content: |
+      [Unit]
+      Description=noVNC (tela do agente no navegador)
+      After=x11vnc.service
+      Requires=x11vnc.service
+
+      [Service]
+      User=agent
+      ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Navegador persistente --------------------------------------------
+  # O perfil mora em /workspace, que e o que da a "sessao que sobrevive":
+  # cookies, logins e abas continuam apos reboot, rebuild ou restore.
+  # A porta de depuracao 9222 fica em localhost para o agente dirigir o
+  # navegador por CDP sem expor controle remoto na rede.
+  - path: /etc/systemd/system/chrome.service
+    content: |
+      [Unit]
+      Description=Google Chrome persistente do agente
+      After=openbox.service
+      Requires=xvfb.service
+
+      [Service]
+      User=agent
+      Environment=DISPLAY=:1
+      ExecStart=/usr/bin/google-chrome-stable \
+        --user-data-dir=/workspace/.browser \
+        --remote-debugging-port=9222 \
+        --remote-debugging-address=127.0.0.1 \
+        --window-position=0,0 \
+        --window-size=1920,1080 \
+        --start-maximized \
+        --no-first-run \
+        --no-default-browser-check \
+        --disable-session-crashed-bubble \
+        --disable-features=Translate,MediaRouter \
+        --password-store=basic
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Diagnostico de dentro da maquina ---------------------------------
+  - path: /usr/local/bin/agent-status
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Estado dos servicos da tela e do espaco em disco/memoria.
+      echo "=== servicos ==="
+      for unit in xvfb openbox x11vnc novnc chrome; do
+        printf "%-10s %s\n" "$unit" "$(systemctl is-active ${unit}.service)"
+      done
+      echo
+      echo "=== portas locais ==="
+      ss -lntp 2>/dev/null | grep -E '5900|6080|9222' || echo "nenhuma porta da tela ouvindo"
+      echo
+      echo "=== memoria ==="
+      free -h
+      echo
+      echo "=== workspace ==="
+      du -sh /workspace 2>/dev/null
+      df -h / | tail -1
+
+runcmd:
+  # Swap: rede de seguranca contra OOM do Chrome, que e o processo mais
+  # faminto da maquina. 2 GB sobre os 4 GB de RAM.
+  - [ bash, -c, "fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab" ]
+  - [ bash, -c, "sysctl -w vm.swappiness=10 && echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf" ]
+
+  # A chave SSH foi injetada em root pelo doctl; replicar para o usuario agent.
+  - [ bash, -c, "install -d -m 700 -o agent -g agent /home/agent/.ssh && cp /root/.ssh/authorized_keys /home/agent/.ssh/authorized_keys && chown agent:agent /home/agent/.ssh/authorized_keys && chmod 600 /home/agent/.ssh/authorized_keys" ]
+
+  # Workspace compartilhado -- o diretorio que a doc do Grok chama de /workspace.
+  - [ bash, -c, "mkdir -p /workspace/.browser && chown -R agent:agent /workspace" ]
+
+  # Google Chrome do repositorio oficial (nao Chromium): melhor compatibilidade
+  # com site real, que e o ponto de um agente que navega na web de verdade.
+  - [ bash, -c, "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg" ]
+  - [ bash, -c, "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list" ]
+  - [ bash, -c, "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq google-chrome-stable" ]
+
+  # Node 22 + Claude Code, para o agente rodar dentro da propria maquina.
+  - [ bash, -c, "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -" ]
+  - [ bash, -c, "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs" ]
+  - [ bash, -c, "npm install -g @anthropic-ai/claude-code 2>&1 | tail -2" ]
+
+  # Tailscale instalado mas NAO autenticado: sem authkey no cofre, o login e
+  # um clique do dono. Fica pronto para quando ele quiser a maquina na malha.
+  - [ bash, -c, "curl -fsSL https://tailscale.com/install.sh | sh" ]
+
+  # Firewall: so SSH. A tela e a porta de depuracao nunca saem da maquina.
+  - [ bash, -c, "ufw default deny incoming && ufw default allow outgoing && ufw allow 22/tcp && ufw --force enable" ]
+
+  # Subir a tela.
+  - [ systemctl, daemon-reload ]
+  - [ bash, -c, "systemctl enable --now xvfb openbox x11vnc novnc chrome" ]
+
+  # Marca de conclusao lida pelo script de espera -- sem isso nao ha como
+  # distinguir "cloud-init ainda rodando" de "cloud-init falhou".
+  - [ bash, -c, "echo READY > /var/lib/agent-computer-ready" ]
+
+final_message: "agent computer pronto em $UPTIME segundos"
