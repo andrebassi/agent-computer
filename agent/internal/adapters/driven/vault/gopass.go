@@ -120,6 +120,21 @@ func New(store secretReader) *Gopass {
 // nome da chave. Um log de diagnóstico que imprimisse o segredo derrubaria a
 // razão de o cofre existir, e logs vazam por caminhos que ninguém revisa.
 func (g *Gopass) Get(ctx context.Context, key string) (string, error) {
+	// Receptor NULO e um caso real, e nao paranoia.
+	//
+	// `openVault` devolve nil quando o cofre nao abre -- comportamento
+	// deliberado, para quem chama cair para o ambiente. Mas um `*Gopass` nulo
+	// atribuido a uma interface produz uma interface NAO-nula: a armadilha
+	// classica do Go. O `if store != nil` de quem chama passa, o metodo e
+	// invocado, e o processo morre com nil pointer dereference.
+	//
+	// Aconteceu em 30/08/2026, no teste de busca: quatro perguntas seguidas
+	// derrubaram o binario com panic, porque ele rodava como `agent` -- que nao
+	// le o cofre por desenho. Nenhum teste em processo tinha pegado, porque
+	// todos constroem o adapter com um dubl e de verdade.
+	if g == nil || g.store == nil {
+		return "", fmt.Errorf("%w: cofre indisponivel", ErrSecretNotFound)
+	}
 	if err := validateKey(key); err != nil {
 		return "", err
 	}

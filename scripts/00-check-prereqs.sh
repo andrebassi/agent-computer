@@ -41,6 +41,16 @@ fi
 
 echo
 echo "=== droplet ja existe? ==="
+# `load_token` ANTES de perguntar a API, e nao depois.
+#
+# Sem ele o `doctl` roda sem credencial, `droplet_ip` devolve vazio, e esta
+# checagem responde "nome livre" SEMPRE -- inclusive com o droplet no ar. Falso
+# negativo silencioso, que so apareceria ao tentar criar e receber um conflito.
+#
+# Aqui nao ha `set -e` (o topo do arquivo desliga de proposito, para uma
+# checagem que falha nao matar as seguintes), entao a ausencia do token nao
+# aborta nada -- ela apenas mente.
+load_token >/dev/null 2>&1 || echo "  ⚠️  sem token do DigitalOcean; a resposta abaixo nao vale"
 ip="$(droplet_ip)"
 if [ -n "$ip" ]; then echo "  ℹ️  '$DROPLET_NAME' ja existe em $ip"
 else echo "  ✅ nome '$DROPLET_NAME' livre"; fi

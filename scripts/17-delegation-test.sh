@@ -15,11 +15,17 @@
 # pacotes do cloud-init.
 source "$(dirname "$0")/lib.sh"
 set -euo pipefail
+# Sem isto, `droplet_ip` nao consulta a API, `agent_ssh` devolve rc=1 e o `set
+# -e` aborta o script SEM MENSAGEM -- ele parece ter terminado na primeira etapa.
+#
+# Mordeu de novo em 30/08/2026, neste arquivo: o teste de delegacao morria em
+# "1/4 limpando o resultado anterior" com rc=1 e nada mais. A varredura que
+# achou isto compara quem USA agent_ssh com quem CHAMA load_token, e vale a pena
+# repetir sempre que um script novo entrar.
+load_token
 
 projectDir="/workspace/projects/star-count"
 
-xaiKey="$(timeout 25s pass show bassi/xai/apikey 2>/dev/null | head -1)"
-[ -z "$xaiKey" ] && { echo "🛑 chave da xAI nao disponivel"; exit 1; }
 
 echo "=== 1/4 limpando o resultado anterior ==="
 # Sem isto, um diretorio deixado por uma corrida antiga faria o teste passar
@@ -36,19 +42,40 @@ test_formatter.py com unittest cobrindo zero, tres digitos, quatro digitos e set
 Criterio de pronto: 'python3 -m unittest discover' passar dentro de ${projectDir}. \
 Ao final, diga qual foi o stargazers_count que voce leu na pagina."
 
-# A chave vai no AMBIENTE, nunca em linha de comando: `ps` a exporia a qualquer
-# processo da maquina.
+# Roda como `agentd`, que le a chave do COFRE -- e por isso ela nao aparece em
+# lugar nenhum.
 #
-# E a saida vai INTEIRA para o log, sem `| tail`: com `set -o pipefail` o `tail`
+# Antes era `agent_ssh "XAI_API_KEY='$xaiKey' agentd ..."`, com um comentario
+# afirmando que a chave ia "no ambiente, nunca em linha de comando". O
+# comentario estava errado: a atribuicao faz parte do comando remoto, e `ps` no
+# droplet a mostrava. Agora nao ha chave para expor -- o binario a busca no
+# cofre, e as ferramentas do modelo continuam rebaixadas para `agent`.
+#
+# A saida vai INTEIRA para o log, sem `| tail`: com `set -o pipefail` o `tail`
 # devolveria o proprio codigo de saida, e uma falha do agente sairia como 0 —
 # foi exatamente o que aconteceu na primeira corrida deste script.
-agent_ssh "XAI_API_KEY='$xaiKey' /usr/local/bin/agentd -screen 2 -prompt \"$tarefa\"" 2>&1
+agentd_run "-screen 2 -prompt \"$taskText\"" 2>&1
 
 echo
 echo "=== 3/4 verificando pelo EFEITO: o teste roda? ==="
 # O teste de verdade, na maquina, e nao a afirmacao de que ele passa.
-agent_ssh "cd '$projectDir' 2>/dev/null && ls -la && echo '--- unittest ---' && python3 -m unittest discover -v 2>&1 | tail -15" \
-  || { echo "🛑 o criterio de pronto NAO foi atingido"; exit 1; }
+#
+# A saida e CAPTURADA e inspecionada, em vez de apenas ecoada.
+#
+# Antes o comando terminava em `| tail -15`, e com isso o codigo de saida era o
+# do `tail` -- sempre 0. O efeito medido em 30/08/2026: `python3: command not
+# found` na maquina, unittest nunca rodou, e o script reportou SUCESSO. Uma
+# verificacao que nao consegue rodar precisa reprovar, nao passar.
+saidaTeste="$(agent_ssh "cd '$projectDir' 2>/dev/null && ls -la && echo '--- unittest ---' && python3 -m unittest discover -v 2>&1" 2>&1)"
+echo "$saidaTeste" | tail -20
+if echo "$saidaTeste" | grep -qE 'command not found|No such file or directory'; then
+  echo "🛑 a verificacao NAO conseguiu rodar -- isso e falha, nao aprovacao"
+  exit 1
+fi
+if ! echo "$saidaTeste" | grep -qE '^OK$|^OK \('; then
+  echo "🛑 o criterio de pronto NAO foi atingido (unittest nao reportou OK)"
+  exit 1
+fi
 
 echo
 echo "=== 4/4 o programa imprime o numero lido da web? ==="

@@ -377,6 +377,10 @@ in
       # Custou cinco falhas em cascata numa suite: uma causa, cinco sintomas em
       # secoes diferentes.
       [ -e ${workspace}/agent/api-token ] && chown agent:agent ${workspace}/agent/api-token
+      # As travas de tela precisam ser gravaveis pelo GRUPO: o servico e o CLI
+      # do operador rodam como usuarios diferentes e os dois legitimamente as
+      # tomam. Arquivo criado por uma versao anterior chega aqui com 0644.
+      chmod g+w ${workspace}/agent/locks/*.lock 2>/dev/null || true
       true
     '';
   };
@@ -687,6 +691,13 @@ in
   # ---------------------------------------------------------------------------
   environment.systemPackages = with pkgs; [
     git curl jq tmux htop unzip gnupg
+    # python3 NAO vem de fabrica aqui, ao contrario do Ubuntu.
+    #
+    # E preciso por dois motivos: o agente escreve codigo Python e precisa
+    # roda-lo, e varios scripts de verificacao usam `python3 -c` na maquina. A
+    # ausencia apareceu com "python3: command not found" DENTRO da verificacao
+    # do teste de delegacao -- que, pior, devolveu rc=0 assim mesmo.
+    python3
     xdotool scrot xorg.xdpyinfo
     nodejs_22
     (helper "screen-add")

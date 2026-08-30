@@ -37,7 +37,20 @@ func NewFileLock(dir string) (*FileLock, error) {
 // explicação até a outra tarefa terminar.
 func (l *FileLock) Acquire(_ context.Context, screen int, taskID string) (func() error, error) {
 	path := filepath.Join(l.dir, fmt.Sprintf("screen-%d.lock", screen))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	// 0660, e nao 0644: o GRUPO precisa escrever.
+	//
+	// Trava de tela e tomada por dois usuarios legitimos -- o servico, que roda
+	// como `agentd`, e o CLI do operador, que roda como `agent`. `flock` exige
+	// abertura para ESCRITA, entao 0644 deixava o segundo de fora.
+	//
+	// Medido em 30/08/2026, depois da separacao de usuarios: o teste de busca
+	// criava a tarefa, aplicava a habilidade, e morria em "abrindo arquivo de
+	// trava: permission denied" -- num diretorio com a permissao certa e um
+	// arquivo com o dono certo.
+	//
+	// Nao e afrouxamento: o conteudo da trava e o nome de quem a segura, nao um
+	// segredo, e o diretorio (2750 agentd:agent) ja limita quem chega ate aqui.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o660)
 	if err != nil {
 		return nil, fmt.Errorf("abrindo arquivo de trava: %w", err)
 	}

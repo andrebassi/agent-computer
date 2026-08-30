@@ -99,6 +99,40 @@ func TestResolveTellsHowToFixWhenNothingIsAvailable(t *testing.T) {
 	}
 }
 
+// Um *Gopass NULO chegando como interface NÃO derruba o processo.
+//
+// É a armadilha clássica do Go, e ela custou um `panic` em produção: `openVault`
+// devolve nil quando o cofre não abre — comportamento deliberado, para cair
+// para o ambiente —, mas um ponteiro nulo atribuído a uma interface produz uma
+// interface NÃO-nula. O `store != nil` daqui passa, o método é chamado, e o
+// binário morre com nil pointer dereference.
+//
+// Medido em 30/08/2026: quatro perguntas seguidas do teste de busca derrubaram
+// o agentd, porque ele rodava como `agent` — que não lê o cofre por desenho.
+//
+// Nenhum teste anterior pegou porque todos passavam um dublê de verdade. Este
+// reproduz o caminho real: o tipo concreto, nulo, virando interface.
+func TestResolveSurvivesTypedNilVault(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "valor-do-ambiente")
+	var semCofre *Gopass // nulo, e vira interface NÃO-nula ao ser passado
+	value, source, err := Resolve(context.Background(), semCofre, "bassi/xai/apikey", "XAI_API_KEY")
+	if err != nil {
+		t.Fatalf("um cofre nulo devia degradar para o ambiente, veio %v", err)
+	}
+	if value != "valor-do-ambiente" || source != SourceEnv {
+		t.Fatalf("esperava o ambiente: %q de %q", value, source)
+	}
+}
+
+// E sem ambiente também, o cofre nulo falha com erro — nunca com pânico.
+func TestResolveWithTypedNilAndNoEnvFailsCleanly(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "")
+	var semCofre *Gopass
+	if _, _, err := Resolve(context.Background(), semCofre, "k", "XAI_API_KEY"); err == nil {
+		t.Fatal("devia falhar, e falhar com erro em vez de pânico")
+	}
+}
+
 // Valor do ambiente com espaço em volta é aparado.
 //
 // Um "\n" no fim vem de qualquer editor e produziria cabeçalho Authorization

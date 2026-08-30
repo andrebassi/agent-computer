@@ -120,6 +120,25 @@ tasks:
     cmds:
       - ./scripts/29-nixos-cloudinit.sh
 
+  lint:
+    desc: 'Gate dos scripts: variável órfã (sobra de renomeação) e uso da API sem load_token'
+    cmds:
+      - ./scripts/33-lint-scripts.sh 2>&1 | tee logs/lint.log
+
+  functional:
+    desc: 'Testes FUNCIONAIS: delegação, busca na web e o integrado — chamam o modelo de verdade'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/17-delegation-test.sh 2>&1 | tee logs/delegation-test.log
+      - ./scripts/21-web-search-test.sh 2>&1 | tee logs/web-search-test.log
+      - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
+
+  hostile:
+    desc: 'Teste HOSTIL: entrada malformada, corpo gigante, auth sob ataque, degradação e concorrência'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/34-hostile-test.sh 2>&1 | tee logs/hostile.log
+
   e2e:
     desc: 'Teste ponta a ponta: as costuras entre as três suítes — cofre, delegação, catálogo, estado, contrato'
     cmds:

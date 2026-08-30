@@ -201,9 +201,9 @@ import json
 print(json.load(open('/workspace/agent/tasks/$runMark-takeover.json'))['State'])
 \" 2>/dev/null")"
 if [ "$taskState" = "done" ] || [ "$taskState" = "blocked" ]; then
-  ok "retomada processada (estado: $estado)"
+  ok "retomada processada (estado: $taskState)"
 else
-  fail "retomada nao funcionou (estado: ${estado:-nada})"
+  fail "retomada nao funcionou (estado: ${taskState:-nada})"
 fi
 
 echo
