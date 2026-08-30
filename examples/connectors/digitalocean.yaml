@@ -1,0 +1,91 @@
+# Conector do DigitalOcean.
+#
+# É o mais recursivo do catálogo: com ele o agente enxerga e opera a própria
+# infraestrutura em que roda — o droplet que o hospeda, o volume onde grava, os
+# snapshots do próprio estado.
+#
+# Instalar:
+#   cp digitalocean.yaml /workspace/agent/connectors/installed/
+#   printf '%s' "$(pass show bassi/digitalocean/api-token)" \
+#     > /workspace/agent/connectors/secrets/digitalocean-token
+#   chmod 600 /workspace/agent/connectors/secrets/digitalocean-token
+#
+# Usar:
+#   agentd -prompt "@digitalocean liste meus droplets e diga quanto custam por mês"
+
+name: digitalocean
+description: >-
+  Consulta e opera recursos do DigitalOcean pela API: droplets, volumes e
+  snapshots. Prefira este conector ao painel web para qualquer consulta —
+  a resposta é estruturada e não depende de layout.
+
+base_url: https://api.digitalocean.com/v2
+
+auth:
+  type: bearer
+  secret_ref: digitalocean-token
+
+operations:
+  - name: list_droplets
+    description: >-
+      Lista os droplets da conta, com nome, região, tamanho, IP e estado.
+    method: GET
+    path: /droplets
+    schema:
+      type: object
+      properties:
+        # A API pagina em 20 por padrão. Uma conta com muitos droplets devolve
+        # só a primeira página, e a resposta NÃO diz que faltou — o agente
+        # concluiria que a conta tem 20 recursos.
+        per_page:
+          type: integer
+          description: Quantos por página, máximo 200
+        tag_name:
+          type: string
+          description: Filtra por etiqueta
+
+  - name: get_droplet
+    description: Detalhes de um droplet específico, incluindo rede e disco.
+    method: GET
+    path: /droplets/{droplet_id}
+    schema:
+      type: object
+      properties:
+        droplet_id:
+          type: integer
+          description: ID numérico do droplet
+      required: [droplet_id]
+
+  - name: list_volumes
+    description: Lista os volumes de bloco, com tamanho e a qual droplet estão anexados.
+    method: GET
+    path: /volumes
+    schema:
+      type: object
+      properties:
+        region:
+          type: string
+          description: Filtra por região, por exemplo nyc3
+
+  - name: list_snapshots
+    description: >-
+      Lista snapshots. O campo size_gigabytes pode vir zerado logo após a
+      criação — o provedor demora para consolidar o tamanho, e isso NÃO
+      significa snapshot vazio.
+    method: GET
+    path: /snapshots
+    schema:
+      type: object
+      properties:
+        resource_type:
+          type: string
+          enum: [droplet, volume]
+          description: Filtra por tipo de recurso
+
+  - name: get_account
+    description: Dados da conta, incluindo limite de droplets e estado.
+    method: GET
+    path: /account
+    schema:
+      type: object
+      properties: {}

@@ -1,0 +1,81 @@
+# Conector do Cloudflare.
+#
+# Instalar:
+#   cp cloudflare.yaml /workspace/agent/connectors/installed/
+#   printf '%s' "$(pass show bassi/cloudflare/token)" \
+#     > /workspace/agent/connectors/secrets/cloudflare-token
+#   chmod 600 /workspace/agent/connectors/secrets/cloudflare-token
+
+name: cloudflare
+description: >-
+  Consulta zonas, registros de DNS e túneis do Cloudflare. Prefira este
+  conector ao painel: o painel muda de layout e exige sessão viva.
+
+base_url: https://api.cloudflare.com/client/v4
+
+auth:
+  type: bearer
+  secret_ref: cloudflare-token
+
+operations:
+  - name: verify_token
+    description: >-
+      Confere se o token é válido e está ativo. Use isto ANTES de concluir que
+      uma operação falhou por permissão — token expirado e escopo insuficiente
+      produzem erros parecidos.
+    method: GET
+    path: /user/tokens/verify
+    schema:
+      type: object
+      properties: {}
+
+  - name: list_zones
+    description: Lista as zonas (domínios) da conta, com o id que as outras operações pedem.
+    method: GET
+    path: /zones
+    schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Filtra pelo nome do domínio
+        per_page:
+          type: integer
+          description: Quantos por página, máximo 50
+
+  - name: list_dns_records
+    description: >-
+      Lista os registros DNS de uma zona. O zone_id sai de list_zones — não é
+      o nome do domínio.
+    method: GET
+    path: /zones/{zone_id}/dns_records
+    schema:
+      type: object
+      properties:
+        zone_id:
+          type: string
+          description: ID da zona, obtido em list_zones
+        type:
+          type: string
+          description: Filtra por tipo, por exemplo A, CNAME, TXT
+        name:
+          type: string
+          description: Filtra pelo nome do registro
+      required: [zone_id]
+
+  - name: list_tunnels
+    description: >-
+      Lista os túneis Cloudflare da conta. Exige account_id, que é diferente do
+      zone_id — confundir os dois devolve 404, e não uma mensagem clara.
+    method: GET
+    path: /accounts/{account_id}/cfd_tunnel
+    schema:
+      type: object
+      properties:
+        account_id:
+          type: string
+          description: ID da conta
+        is_deleted:
+          type: boolean
+          description: Inclui túneis apagados quando verdadeiro
+      required: [account_id]

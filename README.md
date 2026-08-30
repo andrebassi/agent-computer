@@ -124,9 +124,10 @@ agentd -prompt "@github siga /release e publique"           # conector + habilid
 | `@nome` | anexa um conector à tarefa | `/workspace/agent/connectors/installed/` |
 | `/nome` | injeta uma habilidade salva | `/workspace/agent/skills/<nome>.md` |
 
-Manifesto de conector em **JSON ou YAML**. Exemplos em `examples/connectors/` — o
-`gitlab.yaml` mostra o que o YAML acrescenta: comentário explicando o escopo do
-token e o limite de paginação da API, que não cabem em JSON.
+Manifesto de conector em **JSON ou YAML**. Catálogo de exemplos prontos e
+testados em [`examples/`](examples/README.md) — DigitalOcean, Cloudflare, GitLab
+e GitHub, mais duas habilidades. Esse arquivo também lista **o que não dá para
+conectar e por quê** (GLPI, AWS, Google), para poupar a tentativa.
 
 ⚠️ **Conectores são de conta**: instalar um o torna disponível a todas as telas, e
 a credencial fica ao alcance de qualquer agente da máquina.
