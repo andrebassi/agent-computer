@@ -59,12 +59,15 @@ Cada linha é uma afirmação da doc, não uma ideia nossa. `✅` foi implementa
 
 ## 6. Conectar um app
 
-| Cláusula | Estado |
-|---|---|
-| "Connectors ... shown as Plugins" | ❌ |
-| "type `@` to attach the connector to the task" | ❌ |
-| "type `/` to reference a saved skill" | ❌ |
-| "Installed connectors are account-wide" | ❌ |
+| Cláusula | Estado | Nota |
+|---|---|---|
+| "Connectors give a Bot a structured way to work with supported services" | ✅ | manifesto JSON ou YAML vira ferramenta HTTP |
+| "type `@` to attach the connector to the task" | ✅ | `ParseTaskRequest`; só o anexado entra |
+| "type `/` to reference a saved skill" | ✅ | habilidades em `/workspace/agent/skills` |
+| "Installed connectors are account-wide" | ✅ | catálogo no volume, comum a todas as telas |
+| "Complete authentication in your browser if requested" | ⚠️ | credencial por arquivo (`-connector-secret`); sem fluxo de navegador |
+| "Connectors are shown as **Plugins**" (a tela de catálogo) | ❌ | é interface, não infraestrutura |
+| "Prefer a connector when one is available" | ✅ | dito na descrição do conector e nos exemplos |
 
 ## 7. Trabalhar com arquivos
 
@@ -98,9 +101,18 @@ Cada linha é uma afirmação da doc, não uma ideia nossa. `✅` foi implementa
 
 | | 29/08 manhã | 29/08 depois do agente |
 |---|---|---|
-| ✅ implementado e testado | 24 | **30** |
-| ⚠️ parcial | 2 | 2 |
-| ❌ ausente | 13 | **7** |
+| ✅ implementado e testado | 24 | **35** |
+| ⚠️ parcial | 2 | **3** |
+| ❌ ausente | 13 | **4** |
+
+### O que ainda falta, e por quê
+
+| Ausente | Motivo |
+|---|---|
+| tela de catálogo (`Settings → Plugins`) | é interface gráfica, não infraestrutura; o catálogo em si existe |
+| secret request como fluxo de tela | o tipo e a garantia existem no domínio; falta a tela que coleta |
+| detecção de computador inalcançável | `task update` recupera; falta o estado de erro que o dispara sozinho |
+| cookies compartilhados entre telas | divergência com motivo técnico — o Chrome trava o `user-data-dir` |
 
 ### Provado contra o Grok de verdade, no droplet
 
@@ -111,6 +123,8 @@ Cada linha é uma afirmação da doc, não uma ideia nossa. `✅` foi implementa
 | status na tela | `tela 1: PRECISA DE VOCÊ — precisa de senha ou passkey` |
 | trava por tela | segunda tarefa recusada: *"a tela já tem uma tarefa ativa"* |
 | trava liberada | `flock` livre mesmo com a tarefa bloqueada — o processo não segura a tela esperando a pessoa |
+| conector YAML | instalado um manifesto do GitLab; o Grok respondeu `gitlab.list_issues, gitlab.create_issue` — ele enxerga as ferramentas |
+| `@` e `/` juntos | `"@gitlab /estilo ... /workspace/projects/saida.txt"` → conector anexado, habilidade injetada, **caminho preservado** |
 
 ## O que falta, em ordem de dependência
 

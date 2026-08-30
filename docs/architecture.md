@@ -385,6 +385,53 @@ vez de ficar em memória de um processo de vida longa.
 
 ---
 
+### 5.5 Habilidades salvas
+
+Uma habilidade é um procedimento reutilizável guardado no volume durável. Em vez
+de colar dez linhas explicando como publicar um release a cada tarefa,
+escreve-se `/release`.
+
+```
+/workspace/agent/skills/
+  ├── release.md
+  ├── revisao.md
+  └── deploy.md
+```
+
+O bloco entra no texto **delimitado e nomeado**:
+
+```
+liste as issues abertas do projeto 12345
+
+--- habilidade salva: release ---
+1. rode `task test:cov` e confirme o gate verde
+2. crie a tag assinada
+3. publique
+--- fim de release ---
+```
+
+Três decisões pequenas com motivo:
+
+**A delimitação não é enfeite.** Sem ela, um procedimento longo se mistura ao
+pedido e o modelo passa a tratar o procedimento como o objetivo — responde
+descrevendo como publicaria um release em vez de listar as issues.
+
+**O bloco entra depois do pedido**, para o objetivo vir primeiro. Instrução longa
+antes da tarefa desloca a atenção do modelo pelo mesmo motivo.
+
+**O limite de 8 KB protege custo, não disco.** O conteúdo entra no prompt a cada
+iteração da tarefa, não uma vez.
+
+O nome vem do texto que a pessoa digitou, depois de passar pelo parser de
+marcadores, e por isso é validado antes de virar caminho de arquivo — um nome com
+subida de diretório gravaria fora da pasta.
+
+Habilidade inexistente vira **aviso**, não erro fatal: a pessoa pode ter digitado
+errado, e derrubar a tarefa inteira por um nome trocado é pior do que seguir
+dizendo o que faltou.
+
+---
+
 ## 6. Fluxo ponta a ponta
 
 ### 6.1 Tarefa que conclui sozinha
@@ -460,6 +507,45 @@ a tela recusa outra tarefa?         erro: a tela já tem uma tarefa ativa
 Parece contraditório e não é: o **processo** solta o `flock` (não fica segurando a
 tela enquanto espera a pessoa, que pode demorar horas), mas o **estado** da tarefa
 continua ocupando a tela. Duas travas, propósitos diferentes.
+
+---
+
+### 6.3 Tarefa com conector e habilidade
+
+```
+agentd -prompt "@gitlab siga /release e grave o log em /workspace/projects/saida.txt"
+                 │            │                        │
+                 │            │                        └── caminho: NÃO é marcador
+                 │            └── habilidade: injetada delimitada, depois do pedido
+                 └── conector: 2 ferramentas anexadas ao agente
+
+        ParseTaskRequest (domínio)
+                 │
+    ┌────────────┼────────────────────────────┐
+    ▼            ▼                            ▼
+Connectors    Skills                       Prompt
+[gitlab]      [release]      "siga e grave o log em /workspace/projects/saida.txt"
+    │            │                            │
+    ▼            ▼                            │
+Registry     skills.Expand ──── concatenado ──┘
+.ToolsFor         │
+    │             └─▶ "--- habilidade salva: release --- ... --- fim de release ---"
+    ▼
+gitlab.list_issues
+gitlab.create_issue
+```
+
+**Verificado contra o Grok de verdade**, com um manifesto YAML instalado:
+
+```
+conectores anexados: gitlab (2 ferramentas)
+habilidades aplicadas: estilo
+
+resposta do Grok: gitlab.list_issues, gitlab.create_issue
+```
+
+E as três garantias, conferidas no histórico gravado: marcadores removidos do
+texto, habilidade injetada e delimitada, caminho de arquivo preservado.
 
 ---
 
@@ -717,6 +803,86 @@ túnel SSH que **você** abre.
 
 ---
 
+---
+
+### C11 — Conectores dão uma forma estruturada de usar um serviço
+
+**Por que existe.** A documentação recomenda preferir um conector a clicar pelo
+site, dizendo que é mais confiável. O motivo prático: clicar depende de o layout
+não ter mudado, de a sessão estar viva e de o elemento estar visível. Uma chamada
+de API depende só do contrato.
+
+**Implementação.** Manifesto declarativo, em JSON ou YAML — instalar um serviço
+novo não recompila nada:
+
+```yaml
+name: gitlab
+base_url: https://gitlab.com/api/v4
+auth:
+  # O token precisa do escopo "api". Um token só de leitura faz list_issues
+  # funcionar e create_issue devolver 403 — confuso, porque o conector parece
+  # meio quebrado em vez de mal configurado.
+  type: header
+  header_name: PRIVATE-TOKEN
+  secret_ref: gitlab-token
+operations:
+  - name: list_issues
+    method: GET
+    path: /projects/{id}/issues
+```
+
+Cada operação vira a ferramenta `gitlab.list_issues`. Os dois formatos existem
+porque servem a públicos diferentes: JSON é o que uma ferramenta gera, YAML é o
+que uma pessoa escreve — e o comentário acima é exatamente o tipo de coisa que
+não cabe em JSON e que a próxima pessoa descobriria na marra.
+
+**A credencial nunca está no manifesto**, só a referência a ela. Manifesto é
+copiado, versionado e compartilhado sem ninguém reparar; e como conectores são de
+conta, o valor ficaria ao alcance de todo agente da máquina. O segredo mora em
+`connectors/secrets/` com permissão `0600`, e é lido do disco **a cada chamada**
+em vez de ficar em memória de um processo de vida longa, onde apareceria num
+dump.
+
+**Como sabemos.** Um teste instala os exemplos versionados de verdade e confere
+que cada operação produz esquema válido e descrição não vazia — exemplo que
+nenhum teste exercita apodrece, e quem o seguir tropeça num erro que ninguém viu.
+E contra o Grok real: perguntado que ferramentas tinha, respondeu
+`gitlab.list_issues, gitlab.create_issue`.
+
+---
+
+### C12 — `@` anexa um conector, `/` referencia uma habilidade
+
+**Por que existe.** São as duas sintaxes que a documentação define para a pessoa
+dizer o que a tarefa pode usar.
+
+**Implementação.** O parsing mora no **domínio**, e não no adaptador de linha de
+comando, para a regra ficar num lugar só — o dia em que entrar uma segunda porta
+de entrada, ela herda o comportamento sem duplicação.
+
+**Só o que foi anexado entra.** A descrição de cada ferramenta vai no prompt a
+cada iteração, então oferecer o catálogo inteiro custaria token em toda chamada e
+daria ao modelo acesso a serviços que a tarefa não pediu.
+
+**A armadilha, e ela mordeu.** A primeira versão da expressão tratava caminho de
+arquivo como habilidade:
+
+```
+"grave em /workspace/projects/saida.txt"
+   → habilidade "workspace" anexada
+   → o caminho REMOVIDO do texto
+   → a tarefa quebra em silêncio
+```
+
+O Go usa RE2, que não tem lookahead negativo, então a proteção não cabia na
+expressão. O que segue o nome é capturado e julgado à parte, distinguindo caminho
+(`/workspace/…`, `/saida.txt`) de pontuação de fim de frase (`/release.`).
+
+**Como sabemos.** O teste que cobre isso **falhou na primeira versão** — foi ele
+que revelou o defeito, não a leitura do código.
+
+---
+
 ## 8. Decisões e por quê
 
 | Decisão | Alternativa | Por que assim |
@@ -838,7 +1004,44 @@ agent-status      # telas, estado durável, portas, recursos
 # o agente
 agentd -screen 1 -prompt "a tarefa"
 agentd -resume -task <id> -note "resolvi o login"
+
+# conectores e habilidades
+agentd -prompt "@gitlab liste as issues do projeto 12345"
+agentd -prompt "@github siga /release e publique"
 ```
+
+### Conectores
+
+O catálogo vive em `/workspace/agent/connectors/`:
+
+```
+connectors/
+  ├── installed/     manifestos ativos (.json, .yaml ou .yml)
+  ├── secrets/       credenciais, 0600, uma por arquivo
+  └── available/     catálogo local, para instalar sem baixar
+```
+
+Instalar é copiar um manifesto para `installed/` e gravar a credencial em
+`secrets/`. Exemplos versionados em `examples/connectors/`:
+
+| Arquivo | Mostra |
+|---|---|
+| `github.json` | o formato que uma ferramenta geraria |
+| `gitlab.yaml` | o que o YAML acrescenta: comentário explicando escopo de token e limite de paginação |
+
+⚠️ **Conectores são de conta.** Instalar um o torna disponível a **todas** as
+telas, e a credencial fica ao alcance de qualquer agente da máquina — é o que a
+documentação define, e a consequência de as telas não serem fronteira de
+segurança. Não instale um conector cujo acesso outro agente não deva ter.
+
+### Habilidades
+
+```
+/workspace/agent/skills/<nome>.md
+```
+
+Um arquivo Markdown por habilidade, referenciado com `/<nome>`. Limite de 8 KB —
+o conteúdo entra no prompt a cada iteração da tarefa, não uma vez.
 
 ### Testes
 
@@ -871,6 +1074,7 @@ motivos, entradas malformadas), e domínio em 100%.
 | RAM com 1 tela | 980 MB de 3915 (25%) |
 | RAM com 2 telas | 1,5 GB (~500 MB por tela) |
 | Perfil do navegador, uso leve | 286 MB |
+| Dependências do módulo Go | 1 direta (`sigs.k8s.io/yaml`), 1 indireta |
 | Chrome | 152.0.7977.64 |
 | Custo com droplet ligado | US$ 26,00/mês |
 | Custo só do estado | US$ 2,00/mês |

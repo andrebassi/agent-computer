@@ -133,8 +133,11 @@ trabalho **continua no volume** por US$ 2/mês. `task up` traz tudo de volta.
 | assumir o controle | ✅ mesma tela, teclado e mouse |
 | sessões de navegador persistem | ✅ perfil no volume |
 | **cookies compartilhados entre bots** | ❌ **divergência**, ver abaixo |
-| connectors / plugins | ❌ não existe |
-| secret request mascarado | ❌ não existe |
+| conectores anexados com `@` | ✅ manifesto JSON ou YAML vira ferramenta |
+| habilidades salvas com `/` | ✅ em `/workspace/agent/skills` |
+| conectores de conta, não de agente | ✅ catálogo no volume durável |
+| tela de catálogo (`Settings → Plugins`) | ❌ é interface, não infraestrutura |
+| secret request como fluxo de tela | ⚠️ o tipo e a garantia existem; falta a tela |
 
 ### Divergência: cookies não são compartilhados entre telas
 
@@ -227,5 +230,7 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
 - [ ] Tailscale instalado, **não autenticado** (sem authkey no cofre)
 - [ ] Claude Code 2.1.251 instalado, **sem auth decidida** — nenhum agente roda ainda
 - [ ] Cookies compartilhados entre telas (divergência acima)
-- [ ] Connectors e secret request mascarado
+- [ ] Tela de coleta do secret request (o tipo e a garantia já existem)
+- [ ] Detecção de computador inalcançável, para disparar o recover sozinho
+- [ ] Tela de catálogo de conectores
 - [ ] Avaliar KasmVNC para resolução dinâmica
