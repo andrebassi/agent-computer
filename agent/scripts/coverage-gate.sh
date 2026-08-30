@@ -17,8 +17,12 @@ cd "$(dirname "$0")/.."
 # o build falha por motivo que não tem nada a ver com o código.
 export GOWORK=off
 
-echo "rodando testes com cobertura"
-go test -coverprofile=cover.out -covermode=atomic ./internal/... > /tmp/agent-cover.log 2>&1 || {
+# -race é obrigatório desde que o laço passou a executar ferramentas em
+# paralelo. Um gate sem ele deixa corrida de dados passar VERDE, e corrida de
+# dados neste projeto não trava — faz a coisa errada em silêncio, que é o modo
+# de falha que a trava de tela existe para impedir.
+echo "rodando testes com cobertura e detector de corrida"
+go test -race -coverprofile=cover.out -covermode=atomic ./internal/... > /tmp/agent-cover.log 2>&1 || {
   echo "🛑 testes falharam:"
   grep -E "FAIL|---" /tmp/agent-cover.log | head -20
   exit 1

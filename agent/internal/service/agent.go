@@ -176,17 +176,28 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 			return a.settle(ctx, task, conv)
 		}
 
-		for _, call := range completion.ToolCalls {
-			blocked, err := a.runTool(ctx, task, conv, call)
+		// A execução pode ser paralela; a APLICAÇÃO é sempre em série, na ordem
+		// em que o modelo pediu.
+		outcomes := a.runToolCalls(ctx, task, completion.ToolCalls)
+		blockedInTurn := false
+		for _, out := range outcomes {
+			blocked, err := a.applyOutcome(ctx, task, conv, out)
 			if err != nil {
 				return err
 			}
-			// Bloqueou: o laço para aqui e devolve o controle. Continuar
-			// chamando o modelo enquanto a pessoa não agiu é exatamente o
-			// "tentar contornar a verificação" que a documentação proíbe.
+			// Não sai do laço aqui: os resultados das ferramentas irmãs que já
+			// rodaram precisam entrar no histórico. Sair agora produziria efeito
+			// no mundo sem registro — e o histórico é o que alguém lê depois
+			// para saber o que a máquina fez.
 			if blocked {
-				return a.settle(ctx, task, conv)
+				blockedInTurn = true
 			}
+		}
+		// Bloqueou: o laço para aqui e devolve o controle. Continuar chamando o
+		// modelo enquanto a pessoa não agiu é exatamente o "tentar contornar a
+		// verificação" que a documentação proíbe.
+		if blockedInTurn {
+			return a.settle(ctx, task, conv)
 		}
 	}
 
@@ -270,45 +281,6 @@ func (a *Agent) publish(ctx context.Context, task *domain.Task, conv *domain.Con
 		_ = conv.AddSystemNote(fmt.Sprintf("aviso não entregue: %v", err))
 		_ = a.store.SaveConversation(ctx, conv)
 	}
-}
-
-// runTool executa uma chamada e devolve se ela bloqueou a tarefa.
-//
-// Falha de ferramenta NÃO derruba a tarefa: o erro vira conteúdo no histórico e
-// o modelo costuma se recuperar sozinho na iteração seguinte. Abortar a cada
-// comando com saída diferente de zero tornaria o agente inútil, porque
-// `grep` sem resultado já devolve 1.
-func (a *Agent) runTool(ctx context.Context, task *domain.Task, conv *domain.Conversation, call domain.ToolCall) (bool, error) {
-	tool, ok := a.tools[call.Name]
-	if !ok {
-		// Modelo inventa nome de ferramenta. Dizer isso a ele no histórico é
-		// mais útil do que abortar.
-		return false, conv.AddToolResult(call.ID, fmt.Sprintf("ferramenta desconhecida: %q", call.Name))
-	}
-
-	_ = a.screen.ShowStatus(ctx, task.Screen, fmt.Sprintf("tela %d: %s", task.Screen, call.Name))
-
-	result, err := tool.Execute(ctx, task.Screen, call.Arguments)
-	if err != nil {
-		return false, conv.AddToolResult(call.ID, fmt.Sprintf("erro executando %s: %v", call.Name, err))
-	}
-
-	if result.BlockRequest != nil {
-		req := result.BlockRequest
-		if err := task.Block(req.Reason, req.Detail, a.clock()); err != nil {
-			// Motivo inválido não pode virar bloqueio silencioso: o agente
-			// pararia sem a tela saber o que pedir. Volta como erro ao modelo.
-			return false, conv.AddToolResult(call.ID, fmt.Sprintf("pedido de ajuda recusado: %v", err))
-		}
-		if err := conv.AddToolResult(call.ID, result.Output); err != nil {
-			return true, err
-		}
-		_ = a.screen.RequestTakeover(ctx, task.Screen, req.Reason, req.Detail)
-		_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
-		return true, nil
-	}
-
-	return false, conv.AddToolResult(call.ID, result.Output)
 }
 
 // Resume devolve o controle ao agente depois que a pessoa resolveu o passo

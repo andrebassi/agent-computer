@@ -71,6 +71,14 @@ func (h *httpTool) Spec() ports.ToolSpec {
 		Name:        h.connectorName + "." + h.operation.Name,
 		Description: h.operation.Description,
 		Schema:      schema,
+		// Chamada de API é a ÚNICA ferramenta deste agente que pode rodar em
+		// paralelo com as irmãs. Ela não guarda estado entre chamadas, monta a
+		// requisição do zero a cada vez, e não toca em nada compartilhado — nem
+		// a aba do Chrome, nem o teclado da tela, nem /workspace.
+		//
+		// O ganho é real: uma tarefa que consulta dois conectores no mesmo turno
+		// deixa de pagar a soma das latências de rede.
+		Concurrent: true,
 	}
 }
 

@@ -19,6 +19,24 @@ type ToolSpec struct {
 	// Schema é o JSON Schema dos parâmetros, como a API espera. Fica como texto
 	// cru para não amarrar o domínio ao formato de um fornecedor.
 	Schema string
+	// Concurrent declara que a ferramenta pode rodar AO MESMO TEMPO que outras
+	// do mesmo turno.
+	//
+	// O padrão é FALSO, e isso é decisão de segurança, não conservadorismo. As
+	// ferramentas deste agente disputam recursos com estado: as do navegador
+	// falam com a MESMA aba do Chrome, o shell mexe no mesmo /workspace, e o
+	// take-over muda o estado da tela. Duas ações simultâneas ali não falham —
+	// fazem a coisa errada, em silêncio. É exatamente o modo de falha que
+	// motivou a trava de uma tarefa por tela.
+	//
+	// Quem marca isto como verdadeiro assume três compromissos: não guardar
+	// estado entre chamadas, não tocar em recurso compartilhado, e honrar o
+	// cancelamento do contexto — sem o último, uma ferramenta presa segura o
+	// turno inteiro.
+	//
+	// O campo não é enviado à API: é decisão de execução, não parte do contrato
+	// que o modelo vê.
+	Concurrent bool
 }
 
 // Completion é a resposta do modelo a um turno.
