@@ -52,9 +52,62 @@ droplet_id() {
     | awk -v n="$DROPLET_NAME" '$1==n {print $2}' | head -1
 }
 
+# Nome do computador na malha Tailscale, quando ele estiver nela.
+TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-agent-computer}"
+
+# Devolve o melhor endereço para alcançar o computador.
+#
+# Prefere a malha ao IP público por um motivo prático, não estético: o IP
+# público MUDA a cada rebuild do droplet, e o endereço da malha não. Cinco
+# reconstruções num dia produziram cinco IPs diferentes, e cada uma invalidou
+# comando anotado, entrada de known_hosts e túnel aberto.
+#
+# A escolha é silenciosa e com reserva: se a malha não estiver no ar, ou o nó
+# estiver offline nela, cai para o IP público sem reclamar. Uma malha caída não
+# pode impedir o acesso a uma máquina que está de pé.
+agent_host() {
+  # `tailscale status` sai com código diferente de zero quando o serviço está
+  # parado, e é assim que se distingue "malha caída" de "nó offline".
+  if command -v tailscale >/dev/null 2>&1; then
+    local meshAddress
+    meshAddress="$(timeout 8s tailscale status --json 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+if data.get('BackendState') != 'Running':
+    raise SystemExit
+for peer in (data.get('Peer') or {}).values():
+    nome = (peer.get('HostName') or '').split('.')[0]
+    if nome == '$TAILSCALE_HOSTNAME' and peer.get('Online'):
+        ips = peer.get('TailscaleIPs') or []
+        if ips:
+            print(ips[0])
+        break
+" 2>/dev/null)"
+    if [ -n "$meshAddress" ]; then
+      echo "$meshAddress"
+      return 0
+    fi
+  fi
+  droplet_ip
+}
+
+# Diz por qual caminho o acesso está indo, para o diagnóstico não virar
+# adivinhação quando algo falhar.
+agent_route() {
+  local host; host="$(agent_host)"
+  case "$host" in
+    100.*) echo "malha Tailscale ($host)" ;;
+    "")    echo "sem rota — o droplet não existe" ;;
+    *)     echo "IP público ($host)" ;;
+  esac
+}
+
 # Atalho de SSH com as opções que evitam travar em prompt interativo.
 agent_ssh() {
-  local ip; ip="$(droplet_ip)"
+  local ip; ip="$(agent_host)"
   [ -z "$ip" ] && { echo "🛑 droplet '$DROPLET_NAME' não existe" >&2; return 1; }
   ssh -i "$SSH_KEY_FILE" \
       -o StrictHostKeyChecking=accept-new \

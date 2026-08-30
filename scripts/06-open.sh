@@ -7,8 +7,11 @@ source "$(dirname "$0")/lib.sh"
 set -uo pipefail
 load_token
 
-ip="$(droplet_ip)"
+# Prefere a malha ao IP público: o endereço da malha não muda a cada rebuild,
+# então o túnel e o known_hosts continuam valendo.
+ip="$(agent_host)"
 [ -z "$ip" ] && { echo "🛑 droplet nao existe — rodar 01-create.sh"; exit 1; }
+echo "rota: $(agent_route)"
 
 # Derruba túnel anterior para a mesma porta, senão o ssh falha com "Address already in use"
 # e o usuário fica olhando uma tela velha achando que é a nova.

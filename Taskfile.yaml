@@ -5,6 +5,13 @@ version: '3'
 # `task up` saiu rc=0 sem ter criado droplet nenhum.
 set: [pipefail]
 
+# O diretório de logs é ignorado pelo git, então um clone novo não o traz — e
+# com pipefail ligado, o `tee` falhando derruba a task inteira. Criar aqui vale
+# para todas elas, e evita o modo de falha em que o trabalho deu certo mas a
+# task reporta erro.
+run: once
+
+
 # Agent computer — desktop virtual persistente no DigitalOcean.
 # Todo comando registra saída em logs/, conforme a regra de logging do workspace.
 
@@ -19,11 +26,13 @@ tasks:
   check:
     desc: Confere binários, token, chave SSH e latência antes de gastar
     cmds:
+      - mkdir -p logs
       - ./scripts/00-check-prereqs.sh 2>&1 | tee logs/check.log
 
   up:
     desc: Cria o droplet e espera o cloud-init terminar
     cmds:
+      - mkdir -p logs
       - ./scripts/01-create.sh 2>&1 | tee logs/create.log
       - ./scripts/02-wait-ready.sh 2>&1 | tee logs/wait.log
       - ./scripts/03-status.sh 2>&1 | tee logs/status.log
@@ -32,16 +41,19 @@ tasks:
   validate:
     desc: Validação ponta a ponta — units, portas, firewall, X, Chrome, noVNC, pixel
     cmds:
+      - mkdir -p logs
       - ./scripts/08-validate.sh 2>&1 | tee logs/validate.log
 
   status:
     desc: Estado do droplet e dos serviços da tela
     cmds:
+      - mkdir -p logs
       - ./scripts/03-status.sh 2>&1 | tee logs/status.log
 
   open:
     desc: Abre a tela do agente no navegador local, por túnel SSH
     cmds:
+      - mkdir -p logs
       - ./scripts/06-open.sh 2>&1 | tee logs/open.log
 
   ssh:
@@ -58,6 +70,7 @@ tasks:
   health:
     desc: Diagnostica computador inalcançável e diz qual recuperação usar
     cmds:
+      - mkdir -p logs
       - ./scripts/14-health.sh 2>&1 | tee logs/health.log
 
   catalog:
@@ -72,21 +85,25 @@ tasks:
   integration-test:
     desc: Teste integrado na máquina real — 12 seções, do estado durável ao take-over
     cmds:
+      - mkdir -p logs
       - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
 
   persist-test:
     desc: Reinicia o droplet e prova que serviços e sessão do navegador sobrevivem
     cmds:
+      - mkdir -p logs
       - ./scripts/09-persistence-test.sh 2>&1 | tee logs/persistence.log
 
   update:
     desc: 'Verbo UPDATE da doc: recria o computador com imagem nova, preservando /workspace'
     cmds:
+      - mkdir -p logs
       - ./scripts/10-update.sh 2>&1 | tee logs/update.log
 
   reset:
     desc: 'Verbo RESET da doc: volta ao snapshot durável e DESCARTA trabalho recente'
     cmds:
+      - mkdir -p logs
       - ./scripts/11-reset.sh {{.CLI_ARGS}} 2>&1 | tee logs/reset.log
 
   screens:
@@ -101,11 +118,13 @@ tasks:
   snapshot:
     desc: Snapshot do volume durável (base do RESET)
     cmds:
+      - mkdir -p logs
       - ./scripts/04-snapshot.sh 2>&1 | tee logs/snapshot.log
 
   restore:
     desc: 'Restaura de snapshot. Uso: task restore -- --latest'
     cmds:
+      - mkdir -p logs
       - ./scripts/05-restore.sh {{.CLI_ARGS}} 2>&1 | tee logs/restore.log
 
   logs:
@@ -141,4 +160,5 @@ tasks:
   destroy:
     desc: Destrói o droplet (pede confirmação digitada)
     cmds:
+      - mkdir -p logs
       - ./scripts/07-destroy.sh 2>&1 | tee logs/destroy.log
