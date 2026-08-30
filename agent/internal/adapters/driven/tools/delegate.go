@@ -71,9 +71,36 @@ type Delegate struct {
 	binary string
 }
 
+// maxDelegateCostUSD é o teto de gasto de UMA delegação.
+//
+// Existe porque o agente de código decide sozinho quantos turnos gastar, e uma
+// tarefa mal descrita pode virar uma escavação cara sem nada a mostrar. O teto
+// corta e devolve `error_max_budget_usd`, que é diagnóstico — diferente de
+// descobrir o gasto na fatura.
+//
+// 5 dólares é generoso para trabalho de código real e ainda assim uma ordem de
+// grandeza abaixo do que uma fuga custaria.
+const maxDelegateCostUSD = "5.00"
+
 // delegateArgs é o formato que o modelo preenche.
 type delegateArgs struct {
 	Task string `json:"task"`
+}
+
+// delegateEvent é o que `--output-format json` devolve: uma lista de eventos,
+// e o que interessa é o último, de tipo `result`.
+//
+// A saída em TEXTO não distingue resposta de recusa — foi assim que um pedido
+// de permissão ("preciso que você aprove WebSearch") chegou como se fosse a
+// resposta, com código de saída zero. Aqui `IsError` diz.
+type delegateEvent struct {
+	Type     string  `json:"type"`
+	Subtype  string  `json:"subtype"`
+	IsError  bool    `json:"is_error"`
+	Result   string  `json:"result"`
+	NumTurns int     `json:"num_turns"`
+	CostUSD  float64 `json:"total_cost_usd"`
+	Session  string  `json:"session_id"`
 }
 
 // NewDelegate cria a ferramenta de delegação.
@@ -151,8 +178,14 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	// A lista é explícita, e não `--permission-mode bypassPermissions`, porque o
 	// que se quer liberar é PESQUISA e EDIÇÃO — não uma procuração para tudo num
 	// computador que carrega credencial de conta.
+	//
+	// --output-format json troca texto solto por resultado estruturado. É o que
+	// permite distinguir resposta de recusa, e o que traz custo e sessão — em
+	// texto, os três eram invisíveis.
 	cmd := exec.CommandContext(runCtx, d.binary,
 		"--allowedTools", strings.Join(allowedDelegateTools, ","),
+		"--output-format", "json",
+		"--max-budget-usd", maxDelegateCostUSD,
 		"-p", args.Task)
 	cmd.Dir = d.workdir
 	// A ordem importa: o que vem depois vence. O arquivo de credencial fica por
@@ -167,25 +200,72 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	cmd.Stderr = &buf
 	runErr := cmd.Run()
 
-	output := truncateDelegateOutput(buf.String())
+	raw := buf.String()
 	if runCtx.Err() == context.DeadlineExceeded {
 		return &ports.ToolResult{
 			Output: fmt.Sprintf("o agente de código excedeu %s e foi interrompido. "+
 				"A árvore pode ter ficado pela metade — confira antes de delegar de novo.\n\n%s",
-				delegateTimeout, output),
+				delegateTimeout, truncateDelegateOutput(raw)),
 			Failed: true,
 		}, nil
 	}
-	if runErr != nil {
+
+	result, parseErr := parseDelegateResult(raw)
+	if parseErr != nil {
+		// Degradação segura: sem JSON legível, devolve o bruto em vez de sumir
+		// com o que o agente disse. Um erro de infraestrutura antes de o agente
+		// subir (binário faltando, credencial recusada) sai em texto puro.
 		return &ports.ToolResult{
-			Output: fmt.Sprintf("o agente de código falhou (%v):\n%s", runErr, output),
+			Output: fmt.Sprintf("o agente de código não devolveu resultado legível (%v):\n%s",
+				parseErr, truncateDelegateOutput(raw)),
 			Failed: true,
 		}, nil
 	}
-	if strings.TrimSpace(output) == "" {
+
+	// O relatório de custo vai junto SEMPRE, inclusive no sucesso: sem ele, o
+	// preço de delegar só aparece na fatura, e a decisão de delegar de novo é
+	// tomada sem saber quanto custou a anterior.
+	custo := fmt.Sprintf("[%d turno(s), US$ %.4f]", result.NumTurns, result.CostUSD)
+
+	if result.IsError || runErr != nil {
+		motivo := result.Subtype
+		if motivo == "" {
+			motivo = fmt.Sprintf("%v", runErr)
+		}
+		return &ports.ToolResult{
+			Output: fmt.Sprintf("o agente de código falhou (%s) %s:\n%s",
+				motivo, custo, truncateDelegateOutput(result.Result)),
+			Failed: true,
+		}, nil
+	}
+
+	output := strings.TrimSpace(result.Result)
+	if output == "" {
 		output = "(o agente de código terminou sem dizer nada)"
 	}
-	return &ports.ToolResult{Output: output}, nil
+	return &ports.ToolResult{Output: truncateDelegateOutput(output) + "\n\n" + custo}, nil
+}
+
+// parseDelegateResult acha o evento `result` na saída de `--output-format json`.
+//
+// A saída é uma LISTA de eventos, e o que interessa é o último — os anteriores
+// são inicialização e turnos intermediários. Percorrer até o fim, em vez de
+// pegar o primeiro, é o que faz a função continuar certa quando a lista cresce.
+func parseDelegateResult(raw string) (*delegateEvent, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, fmt.Errorf("saída vazia")
+	}
+	var events []delegateEvent
+	if err := json.Unmarshal([]byte(trimmed), &events); err != nil {
+		return nil, err
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == "result" {
+			return &events[i], nil
+		}
+	}
+	return nil, fmt.Errorf("nenhum evento de tipo result em %d evento(s)", len(events))
 }
 
 // readEnvFile lê o arquivo de ambiente da credencial, no formato CHAVE=valor.

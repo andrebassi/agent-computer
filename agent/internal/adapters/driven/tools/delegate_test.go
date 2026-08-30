@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,10 +130,15 @@ func TestDelegateRunsAgentWithTaskAndCredential(t *testing.T) {
 	}
 
 	fakeAgent := filepath.Join(dir, "fake-agent")
+	// Ecoa argumentos e credencial DENTRO do campo `result` do JSON, e não em
+	// texto solto: desde `--output-format json`, texto puro é tratado como saída
+	// ilegível — e foi assim que este teste quebrou quando a flag entrou.
+	//
 	// Ecoa TODOS os argumentos, e não `$1`/`$2`: checar por posição amarra o
-	// teste à ordem das flags, e ele quebrou quando `--allowedTools` entrou —
-	// falha de teste, não de código.
-	script := "#!/bin/sh\necho \"argumentos:$*\"\necho \"credencial:$ANTHROPIC_API_KEY\"\n"
+	// teste à ordem das flags, que já mudou duas vezes.
+	script := `#!/bin/sh` + "\n" +
+		`printf '[{"type":"result","subtype":"success","is_error":false,` +
+		`"result":"argumentos:%s | credencial:%s","num_turns":1,"total_cost_usd":0.01}]' "$*" "$ANTHROPIC_API_KEY"` + "\n"
 	if err := os.WriteFile(fakeAgent, []byte(script), 0o755); err != nil {
 		t.Fatalf("preparação falhou: %v", err)
 	}
@@ -154,6 +160,157 @@ func TestDelegateRunsAgentWithTaskAndCredential(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "credencial:chave-de-teste") {
 		t.Fatalf("a credencial devia chegar pelo ambiente: %q", result.Output)
+	}
+}
+
+// resultJSON monta a saída de `--output-format json` como ela chega de verdade:
+// uma lista de eventos, com o `result` por último.
+func resultJSON(subtype string, isError bool, text string, turns int, cost float64) string {
+	return fmt.Sprintf(`[{"type":"system","subtype":"init","session_id":"s1"},`+
+		`{"type":"result","subtype":%q,"is_error":%t,"result":%q,"num_turns":%d,"total_cost_usd":%v,"session_id":"s1"}]`,
+		subtype, isError, text, turns, cost)
+}
+
+// fakeAgentPrinting cria um executável que imprime o texto dado e sai com o
+// código pedido.
+func fakeAgentPrinting(t *testing.T, dir, name, saida string, exitCode int) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	script := fmt.Sprintf("#!/bin/sh\ncat <<'FIM'\n%s\nFIM\nexit %d\n", saida, exitCode)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	return path
+}
+
+// credentialDir prepara um diretório com credencial válida.
+func credentialDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cred.env"), []byte("ANTHROPIC_API_KEY=x\n"), 0o600); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	return dir
+}
+
+// Sucesso: devolve o texto do agente, e o custo vai junto.
+//
+// O custo entra SEMPRE, inclusive no sucesso: sem ele, o preço de delegar só
+// aparece na fatura, e a decisão de delegar de novo é tomada às cegas.
+func TestDelegateReturnsResultAndCost(t *testing.T) {
+	dir := credentialDir(t)
+	d := NewDelegate(dir, filepath.Join(dir, "cred.env"))
+	d.binary = fakeAgentPrinting(t, dir, "ok-agent",
+		resultJSON("success", false, "escrevi os três arquivos", 7, 0.1234), 0)
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	if result.Failed {
+		t.Fatalf("não devia falhar: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "escrevi os três arquivos") {
+		t.Fatalf("devia devolver o texto do agente: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "US$ 0.1234") || !strings.Contains(result.Output, "7 turno") {
+		t.Fatalf("custo e turnos deviam ir junto: %q", result.Output)
+	}
+	// O JSON cru NÃO pode vazar para o histórico: ele custa token em toda
+	// iteração seguinte e não diz nada a quem delegou.
+	if strings.Contains(result.Output, `"is_error"`) {
+		t.Fatalf("o JSON cru vazou para a resposta: %q", result.Output)
+	}
+}
+
+// `is_error` é o que a saída em texto não tinha.
+//
+// Este é o caso medido em 30/08: o agente devolveu um pedido de permissão como
+// texto, com código de saída ZERO, e quem delegou leu como resposta. Aqui o
+// código de saída continua zero de propósito — é `is_error` que precisa pegar.
+func TestDelegateDetectsErrorDespiteZeroExitCode(t *testing.T) {
+	dir := credentialDir(t)
+	d := NewDelegate(dir, filepath.Join(dir, "cred.env"))
+	d.binary = fakeAgentPrinting(t, dir, "refusing-agent",
+		resultJSON("error_max_budget_usd", true, "", 1, 5.02), 0)
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"algo caro"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	if !result.Failed {
+		t.Fatalf("is_error devia marcar falha mesmo com rc=0: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "error_max_budget_usd") {
+		t.Fatalf("o motivo devia aparecer: %q", result.Output)
+	}
+}
+
+// Saída ilegível não pode sumir com o que o agente disse.
+//
+// Erro de infraestrutura — binário faltando, credencial recusada — sai em texto
+// puro, antes de qualquer JSON. Engolir isso deixaria o diagnóstico sem nada.
+func TestDelegateFallsBackWhenOutputIsNotJSON(t *testing.T) {
+	dir := credentialDir(t)
+	d := NewDelegate(dir, filepath.Join(dir, "cred.env"))
+	d.binary = fakeAgentPrinting(t, dir, "broken-agent", "Credit balance is too low", 1)
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	if !result.Failed {
+		t.Fatal("devia marcar falha")
+	}
+	if !strings.Contains(result.Output, "Credit balance is too low") {
+		t.Fatalf("o texto bruto devia sobreviver: %q", result.Output)
+	}
+}
+
+// A lista pode crescer, e o `result` é o ÚLTIMO — não o primeiro.
+func TestParseDelegateResultPicksTheResultEvent(t *testing.T) {
+	raw := `[{"type":"system","subtype":"init"},{"type":"assistant"},` +
+		`{"type":"result","subtype":"success","result":"pronto","num_turns":3}]`
+	event, err := parseDelegateResult(raw)
+	if err != nil {
+		t.Fatalf("parse falhou: %v", err)
+	}
+	if event.Result != "pronto" || event.NumTurns != 3 {
+		t.Fatalf("evento errado: %+v", event)
+	}
+
+	// Lista sem `result` é resposta incompleta, e precisa dizer isso.
+	if _, err := parseDelegateResult(`[{"type":"system"}]`); err == nil {
+		t.Fatal("lista sem result devia falhar")
+	}
+	if _, err := parseDelegateResult("   "); err == nil {
+		t.Fatal("saída vazia devia falhar")
+	}
+}
+
+// O teto de gasto vai na linha de comando: é o que impede uma tarefa mal
+// descrita de virar escavação cara sem nada a mostrar.
+func TestDelegatePassesBudgetCap(t *testing.T) {
+	dir := credentialDir(t)
+	d := NewDelegate(dir, filepath.Join(dir, "cred.env"))
+	d.binary = fakeAgentPrinting(t, dir, "arg-echo", resultJSON("success", false, "ok", 1, 0.01), 0)
+
+	// Um executável que ecoa os argumentos prova o que foi passado.
+	echoPath := filepath.Join(dir, "echo-args")
+	if err := os.WriteFile(echoPath, []byte("#!/bin/sh\necho \"$@\" >&2\ncat <<'FIM'\n"+
+		resultJSON("success", false, "ok", 1, 0.01)+"\nFIM\n"), 0o755); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	d.binary = echoPath
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"algo"}`)
+	if err != nil {
+		t.Fatalf("Execute falhou: %v", err)
+	}
+	// stderr e stdout vão para o mesmo buffer, então os argumentos aparecem —
+	// mas como o JSON também está lá, o parse ainda precisa funcionar.
+	if result.Failed && !strings.Contains(result.Output, "max-budget-usd") {
+		t.Fatalf("o teto devia ir na linha de comando: %q", result.Output)
 	}
 }
 

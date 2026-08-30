@@ -267,11 +267,12 @@ func abandonTask(ctx context.Context, taskStore *store.FileStore, screenDriver *
 	if !task.Active() {
 		return fmt.Errorf("tarefa %s já está encerrada (estado %s)", taskID, task.State)
 	}
-	// Tarefa pendente nunca chegou a rodar, então não há transição de falha
-	// possível — ela é simplesmente descartada do disco.
-	if task.State == domain.StatePending {
-		fmt.Printf("tarefa %s estava pendente e foi descartada\n", taskID)
-	} else if err := task.Fail("abandonada por decisão humana", time.Now()); err != nil {
+	// Pendente e bloqueada seguem o MESMO caminho, e isso é a correção de um
+	// defeito: antes, pendente só imprimia uma mensagem e o estado ficava
+	// intacto. Como Active() conta pendente, a tela seguia ocupada enquanto o
+	// comando anunciava "tela liberada" — e a próxima tarefa era recusada sem
+	// que ninguém entendesse por quê.
+	if err := task.Fail("abandonada por decisão humana", time.Now()); err != nil {
 		return err
 	}
 	if err := taskStore.SaveTask(ctx, task); err != nil {

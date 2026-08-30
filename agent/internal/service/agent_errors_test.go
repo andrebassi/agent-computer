@@ -161,6 +161,61 @@ func TestFinalAssistantMessageIsPersisted(t *testing.T) {
 	}
 }
 
+// O turno que PEDE TAKE-OVER precisa chegar ao disco.
+//
+// A conversa é gravada no início de cada iteração, então o resultado da
+// ferramenta que bloqueou — anexado depois disso — ficava só em memória. O
+// Resume recarrega do disco, e o agente voltava lendo um histórico onde ele
+// nunca tinha pedido ajuda: sem saber por que parou, nem o que a pessoa foi
+// resolver.
+//
+// Este teste FALHAVA antes da unificação do laço.
+func TestBlockedTurnIsPersisted(t *testing.T) {
+	_, task, store, _, _ := blockedAgent(t, nil)
+
+	conv := store.conversations[task.ID]
+	if conv == nil {
+		t.Fatal("conversa não foi gravada")
+	}
+	var foundToolResult bool
+	for _, m := range conv.Messages {
+		if m.Role == domain.RoleTool && m.Content == "aguardando" {
+			foundToolResult = true
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("o resultado da ferramenta que bloqueou devia estar no disco: %+v", conv.Messages)
+	}
+}
+
+// A resposta final de uma tarefa RETOMADA precisa chegar ao disco.
+//
+// O laço da retomada era uma cópia do laço do início, e as duas divergiram: a
+// cópia não gravava a conversa ao concluir. O comentário que explica por que a
+// gravação é necessária existia só na metade que a tinha.
+//
+// Este teste FALHAVA antes da unificação do laço.
+func TestResumeAlsoPersistsFinalAnswer(t *testing.T) {
+	agent, task, store, _, model := blockedAgent(t, nil)
+
+	model.responses = []ports.Completion{{Content: "terminei depois do take-over", StopReason: "stop"}}
+	model.calls = 0
+	if err := agent.Resume(context.Background(), task, "resolvi"); err != nil {
+		t.Fatalf("Resume falhou: %v", err)
+	}
+
+	conv := store.conversations[task.ID]
+	var found bool
+	for _, m := range conv.Messages {
+		if m.Role == domain.RoleAssistant && m.Content == "terminei depois do take-over" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a resposta final da retomada devia estar no disco: %+v", conv.Messages)
+	}
+}
+
 // A retomada também respeita o teto de iterações.
 //
 // Um agente que volta do take-over e entra em ciclo queimaria token do mesmo

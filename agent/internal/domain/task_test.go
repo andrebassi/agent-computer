@@ -146,11 +146,15 @@ func TestInvalidTransitions(t *testing.T) {
 		}},
 		{"finish sem start", func(task *Task) error { return task.Finish(baseTime) }},
 		{"block sem start", func(task *Task) error { return task.Block(BlockCaptcha, "x", baseTime) }},
-		{"fail sem start", func(task *Task) error { return task.Fail("erro", baseTime) }},
 		{"finish depois de finish", func(task *Task) error {
 			_ = task.Start(baseTime)
 			_ = task.Finish(baseTime)
 			return task.Finish(baseTime)
+		}},
+		{"fail depois de finish", func(task *Task) error {
+			_ = task.Start(baseTime)
+			_ = task.Finish(baseTime)
+			return task.Fail("tarde demais", baseTime)
 		}},
 	}
 	for _, c := range cases {
@@ -163,6 +167,33 @@ func TestInvalidTransitions(t *testing.T) {
 				t.Fatalf("esperava ErrInvalidTransition, veio %v", err)
 			}
 		})
+	}
+}
+
+// Abandonar uma tarefa que nunca chegou a rodar precisa LIBERAR A TELA.
+//
+// Ela ocupa a tela mesmo sem ter começado — Active() conta pendente. Enquanto
+// Fail recusava vir de pendente, abandoná-la deixava o estado intacto: o comando
+// dizia "tela liberada", a tela seguia ocupada, e a próxima tarefa levava "a tela
+// já tem uma tarefa ativa" sem explicação.
+//
+// A asserção que importa é a última: não é o estado que interessa, é a tela.
+func TestFailFromPendingFreesTheScreen(t *testing.T) {
+	task, err := NewTask("t1", 1, "faz algo", baseTime)
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if !task.Active() {
+		t.Fatal("preparação falhou: pendente devia ocupar a tela")
+	}
+	if err := task.Fail("abandonada antes de começar", baseTime); err != nil {
+		t.Fatalf("fail a partir de pendente devia ser aceito: %v", err)
+	}
+	if task.State != StateFailed || task.Failure == "" {
+		t.Fatalf("estado ou motivo errado: %s/%q", task.State, task.Failure)
+	}
+	if task.Active() {
+		t.Fatal("a tela continua ocupada — abandonar não liberou nada")
 	}
 }
 

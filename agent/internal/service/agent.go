@@ -91,6 +91,22 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 		conv.AddUser(task.Prompt)
 	}
 
+	return a.iterate(ctx, task, conv)
+}
+
+// iterate é O laço do agente — um só, usado tanto pelo início quanto pela
+// retomada.
+//
+// Existir uma única vez é o ponto. Ele já foi escrito duas vezes (Run e
+// continueLoop), as cópias divergiram, e as duas divergências eram defeitos: a
+// retomada não gravava a resposta final, e nenhuma das duas gravava o turno que
+// pedia take-over. Toda melhoria futura no laço — retry, paralelismo, evento —
+// entra aqui uma vez.
+//
+// A trava da tela NÃO é adquirida aqui: quem chama já a tem, e flock é por
+// descritor aberto — uma segunda aquisição no mesmo processo colidiria consigo
+// mesma.
+func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Conversation) error {
 	specs := a.toolSpecs()
 
 	for i := 0; i < maxIterations; i++ {
@@ -113,15 +129,7 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 			if err := task.Finish(a.clock()); err != nil {
 				return err
 			}
-			// A conversa é gravada no INÍCIO de cada iteração, então sem esta
-			// gravação a resposta final do agente nunca chegaria ao disco — e
-			// quem fosse ler o histórico depois não encontraria a conclusão,
-			// justamente a parte que interessa.
-			if err := a.store.SaveConversation(ctx, conv); err != nil {
-				return err
-			}
-			_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
-			return a.persist(ctx, task)
+			return a.settle(ctx, task, conv)
 		}
 
 		for _, call := range completion.ToolCalls {
@@ -133,15 +141,35 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 			// chamando o modelo enquanto a pessoa não agiu é exatamente o
 			// "tentar contornar a verificação" que a documentação proíbe.
 			if blocked {
-				return a.persist(ctx, task)
+				return a.settle(ctx, task, conv)
 			}
 		}
 	}
 
 	_ = task.Fail(ErrMaxIterations.Error(), a.clock())
-	_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
-	_ = a.persist(ctx, task)
+	_ = a.settle(ctx, task, conv)
 	return ErrMaxIterations
+}
+
+// settle encerra um turno gravando o DURÁVEL primeiro: conversa, depois tarefa,
+// depois tela.
+//
+// A conversa é gravada no INÍCIO de cada iteração, então tudo que acontece
+// DEPOIS dessa gravação — a resposta final do agente, e o resultado da
+// ferramenta que pediu take-over — só chega ao disco se alguém gravar de novo no
+// fim. Sem isto:
+//
+//   - quem lesse o histórico não encontrava a conclusão da tarefa;
+//   - e a retomada carregava um histórico onde o agente NUNCA pediu ajuda, então
+//     ele voltava sem saber por que tinha parado.
+//
+// A ordem importa: se o processo morrer no meio, o disco tem a verdade. O
+// inverso deixaria a tela anunciando um estado que não foi gravado.
+func (a *Agent) settle(ctx context.Context, task *domain.Task, conv *domain.Conversation) error {
+	if err := a.store.SaveConversation(ctx, conv); err != nil {
+		return fmt.Errorf("gravando conversa: %w", err)
+	}
+	return a.persist(ctx, task)
 }
 
 // runTool executa uma chamada e devolve se ela bloqueou a tarefa.
@@ -209,51 +237,16 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 	if err := a.persist(ctx, task); err != nil {
 		return err
 	}
-	return a.continueLoop(ctx, task, conv)
-}
-
-// continueLoop retoma o laço com a conversa já carregada. Extraído de Run para
-// que Resume não repita a aquisição de trava nem o Start.
-func (a *Agent) continueLoop(ctx context.Context, task *domain.Task, conv *domain.Conversation) error {
+	// A trava é tomada AQUI, e não dentro do laço, porque o laço é o mesmo do
+	// Run — que já a tem. Retomar exige tomá-la de novo: o processo anterior
+	// morreu, e outra tarefa pode ter chegado à tela nesse intervalo.
 	release, err := a.lock.Acquire(ctx, task.Screen, task.ID)
 	if err != nil {
 		return fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
 	}
 	defer func() { _ = release() }()
 
-	specs := a.toolSpecs()
-	for i := 0; i < maxIterations; i++ {
-		conv.Trim(maxHistoryMessages)
-		if err := a.store.SaveConversation(ctx, conv); err != nil {
-			return err
-		}
-		completion, err := a.model.Complete(ctx, conv.Messages, specs)
-		if err != nil {
-			_ = task.Fail(fmt.Sprintf("modelo falhou: %v", err), a.clock())
-			_ = a.persist(ctx, task)
-			return err
-		}
-		conv.AddAssistant(completion.Content, completion.ToolCalls)
-		if len(completion.ToolCalls) == 0 {
-			if err := task.Finish(a.clock()); err != nil {
-				return err
-			}
-			_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
-			return a.persist(ctx, task)
-		}
-		for _, call := range completion.ToolCalls {
-			blocked, err := a.runTool(ctx, task, conv, call)
-			if err != nil {
-				return err
-			}
-			if blocked {
-				return a.persist(ctx, task)
-			}
-		}
-	}
-	_ = task.Fail(ErrMaxIterations.Error(), a.clock())
-	_ = a.persist(ctx, task)
-	return ErrMaxIterations
+	return a.iterate(ctx, task, conv)
 }
 
 // toolSpecs monta a lista de ferramentas oferecidas ao modelo.

@@ -176,10 +176,18 @@ func (t *Task) Finish(now time.Time) error {
 	return nil
 }
 
-// Fail encerra em erro. Aceita vir de rodando ou de bloqueado: uma tarefa pode
-// ser abandonada enquanto ainda espera a pessoa.
+// Fail encerra em erro. Aceita vir de pendente, rodando ou bloqueado: uma tarefa
+// pode ser abandonada enquanto ainda espera a pessoa.
+//
+// Pendente entra na lista porque uma tarefa que NUNCA CHEGOU A RODAR ainda ocupa
+// a tela — Active() a conta. Sem esta transição, abandoná-la não tinha como
+// liberar nada, e o comando dizia "tela liberada" sem liberar: o estado ficava
+// em pendente e a próxima tarefa levava "a tela já tem uma tarefa ativa".
+//
+// É também o que permite a reconciliação no boot encerrar uma tarefa pendente
+// órfã, deixada por um processo que morreu entre criar e iniciar.
 func (t *Task) Fail(reason string, now time.Time) error {
-	if t.State != StateRunning && t.State != StateBlocked {
+	if t.State != StatePending && t.State != StateRunning && t.State != StateBlocked {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, t.State, StateFailed)
 	}
 	t.State = StateFailed
