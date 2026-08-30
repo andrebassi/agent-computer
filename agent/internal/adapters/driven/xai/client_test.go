@@ -193,7 +193,11 @@ func TestCompleteHandlesNetworkFailure(t *testing.T) {
 	url := server.URL
 	server.Close()
 
-	client, err := NewClient("k", WithBaseURL(url))
+	// WithRetry entra aqui porque servidor fora do ar é falha TRANSITÓRIA, e
+	// desde que o retry existe esta chamada repete três vezes. Com o backoff de
+	// produção o teste passou de instantâneo a 6 segundos — e teste lento é
+	// teste que alguém apaga.
+	client, err := NewClient("k", WithBaseURL(url), WithRetry(3, noWait))
 	if err != nil {
 		t.Fatalf("NewClient falhou: %v", err)
 	}
