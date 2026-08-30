@@ -113,6 +113,13 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 			if err := task.Finish(a.clock()); err != nil {
 				return err
 			}
+			// A conversa é gravada no INÍCIO de cada iteração, então sem esta
+			// gravação a resposta final do agente nunca chegaria ao disco — e
+			// quem fosse ler o histórico depois não encontraria a conclusão,
+			// justamente a parte que interessa.
+			if err := a.store.SaveConversation(ctx, conv); err != nil {
+				return err
+			}
 			_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
 			return a.persist(ctx, task)
 		}

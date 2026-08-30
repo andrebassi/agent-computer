@@ -125,6 +125,42 @@ func TestRunRefusesTaskThatAlreadyStarted(t *testing.T) {
 	}
 }
 
+// A resposta final do agente precisa chegar ao disco.
+//
+// A conversa é gravada no INÍCIO de cada iteração, então o último turno — a
+// conclusão da tarefa — ficava de fora. Quem lesse o histórico depois via o
+// pedido e as chamadas de ferramenta, mas nunca o que o agente concluiu.
+// Descoberto rodando o binário contra a API de verdade, não em teste.
+func TestFinalAssistantMessageIsPersisted(t *testing.T) {
+	model := &fakeModel{responses: []ports.Completion{
+		{Content: "conclui a tarefa assim", StopReason: "stop"},
+	}}
+	store, lock, screen := newFakeStore(), &fakeLock{}, &fakeScreen{}
+	agent := newAgent(model, nil, screen, store, lock)
+
+	task, err := domain.NewTask("t1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação falhou: %v", err)
+	}
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("Run falhou: %v", err)
+	}
+
+	conv := store.conversations["t1"]
+	if conv == nil {
+		t.Fatal("conversa não foi gravada")
+	}
+	var found bool
+	for _, m := range conv.Messages {
+		if m.Role == domain.RoleAssistant && m.Content == "conclui a tarefa assim" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a resposta final devia estar no histórico gravado: %+v", conv.Messages)
+	}
+}
+
 // Conversa já existente é reaproveitada: recomeçar do zero perderia o trabalho
 // feito antes de uma queda do processo.
 func TestRunReusesExistingConversation(t *testing.T) {

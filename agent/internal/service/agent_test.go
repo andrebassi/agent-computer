@@ -127,9 +127,19 @@ func (f *fakeStore) ActiveTaskOnScreen(_ context.Context, screen int) (*domain.T
 	return nil, nil
 }
 
-// SaveConversation guarda o histórico.
+// SaveConversation guarda uma CÓPIA do histórico.
+//
+// Copiar não é preciosismo: o armazenamento real serializa para disco, então o
+// que ficou gravado não muda quando o objeto em memória muda. Um duplo que
+// guardasse o ponteiro refletiria mutações posteriores e passaria a aprovar
+// código que esqueceu de gravar — foi exatamente o que aconteceu, e um canário
+// pegou o teste aprovando com a gravação removida.
 func (f *fakeStore) SaveConversation(_ context.Context, c *domain.Conversation) error {
-	f.conversations[c.TaskID] = c
+	snapshot := &domain.Conversation{
+		TaskID:   c.TaskID,
+		Messages: append([]domain.Message(nil), c.Messages...),
+	}
+	f.conversations[c.TaskID] = snapshot
 	return nil
 }
 
