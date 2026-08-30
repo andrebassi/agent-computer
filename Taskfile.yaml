@@ -55,6 +55,11 @@ tasks:
         [ -z "$ip" ] && { echo "droplet nao existe"; exit 1; }
         ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=accept-new "agent@${ip}"
 
+  integration-test:
+    desc: Teste integrado na máquina real — 12 seções, do estado durável ao take-over
+    cmds:
+      - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
+
   persist-test:
     desc: Reinicia o droplet e prova que serviços e sessão do navegador sobrevivem
     cmds:

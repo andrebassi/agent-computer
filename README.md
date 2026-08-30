@@ -10,13 +10,15 @@ arquitetura**, montada do zero e validada contra a doc item por item.
 
 ## Estado
 
-**No ar e validado** em 2026-08-29. Três suítes fecham com `erros: 0`:
+**Validado** em 2026-08-30. Todas as suítes fecham com `erros: 0`:
 
 | Suíte | O que prova |
 |---|---|
 | `task validate` | 9 seções: units, volume, fronteira, portas, firewall, X, Chrome, noVNC, pixel |
+| `task integration-test` | **12 seções na máquina real, contra o Grok real**: do estado durável ao take-over, com conector e habilidade |
 | `scripts/09-persistence-test.sh` | reboot real: serviços sobem sozinhos, sessão do navegador sobrevive |
 | `scripts/12-update-test.sh` | rebuild real: `/workspace` sobrevive, `/scratch` e pacote manual somem |
+| `agent/scripts/coverage-gate.sh` | 91,4% de cobertura, domínio em 100% |
 
 Lab — serve para testar o conceito, não para produção.
 
@@ -103,6 +105,36 @@ task destroy      # destrói o droplet (o volume fica)
 ```
 
 Para criar tela: `task ssh`, depois `screen-add 2`.
+
+### O agente
+
+Dentro da máquina, `/workspace/agentd`:
+
+```bash
+agentd -screen 1 -prompt "a tarefa"           # roda uma tarefa
+agentd -resume  -task <id> -note "resolvi"    # devolve o controle após take-over
+agentd -abandon -task <id>                    # desiste e libera a tela
+
+agentd -prompt "@gitlab liste as issues do projeto 12345"   # conector
+agentd -prompt "@github siga /release e publique"           # conector + habilidade
+```
+
+| Sintaxe | O que faz | Onde vive |
+|---|---|---|
+| `@nome` | anexa um conector à tarefa | `/workspace/agent/connectors/installed/` |
+| `/nome` | injeta uma habilidade salva | `/workspace/agent/skills/<nome>.md` |
+
+Manifesto de conector em **JSON ou YAML**. Exemplos em `examples/connectors/` — o
+`gitlab.yaml` mostra o que o YAML acrescenta: comentário explicando o escopo do
+token e o limite de paginação da API, que não cabem em JSON.
+
+⚠️ **Conectores são de conta**: instalar um o torna disponível a todas as telas, e
+a credencial fica ao alcance de qualquer agente da máquina.
+
+⚠️ **Tarefa bloqueada trava a tela até alguém decidir.** O estado é durável, então
+ela sobrevive a reboot, destroy e rebuild. `-abandon` é a saída, funciona sem a
+chave da API, e a mensagem de tela ocupada aponta para ele. Descoberto no teste
+integrado: uma tarefa do dia anterior derrubou tudo em cascata.
 
 ## Custo — medido em 2026-08-29
 
