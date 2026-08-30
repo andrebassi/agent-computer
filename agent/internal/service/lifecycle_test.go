@@ -61,6 +61,76 @@ func TestReconcileFailsOrphanRunning(t *testing.T) {
 	}
 }
 
+// Tarefa reconciliada AVISA — é o caso em que o aviso mais importa.
+//
+// Quem disparou a tarefa não tem como saber que o processo caiu: a tela volta a
+// ficar livre e nada denuncia o que houve. Sem este teste a correção não vale
+// nada — remova a chamada a `notify` e ele tem de reprovar.
+//
+// Medido em 30/08/2026: o teste da porta HTTP passava com a fila vazia, porque
+// `done` é filtrado de propósito e nada mais chegava a enfileirar. O silêncio
+// parecia o comportamento certo.
+func TestReconcilePublishesFailureEvent(t *testing.T) {
+	store, screen, sink := newFakeStore(), &fakeScreen{}, &fakeSink{}
+	task := taskInState(t, "t1", 3, domain.StateRunning)
+	store.tasks[task.ID] = task
+
+	life := newLifecycle(store, screen).WithEventSink(sink)
+	if _, err := life.Reconcile(context.Background(), &fakeLock{}); err != nil {
+		t.Fatalf("Reconcile falhou: %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("esperava 1 aviso enfileirado, veio %d", len(sink.events))
+	}
+	event := sink.events[0]
+	if event.Kind != domain.EventFailed {
+		t.Fatalf("o aviso devia ser de falha, veio %s", event.Kind)
+	}
+	if event.TaskID != task.ID || event.Screen != task.Screen {
+		t.Fatalf("o aviso não identifica a tarefa: %+v", event)
+	}
+}
+
+// Fila fora do ar NÃO impede a reconciliação.
+//
+// Avisar é efeito colateral. Se um erro de publicação abortasse a
+// reconciliação, a tela ficaria travada para sempre por causa do canal de aviso
+// — a proteção derrubando justamente o que ela existe para destravar.
+func TestReconcileSurvivesSinkFailure(t *testing.T) {
+	store, screen := newFakeStore(), &fakeScreen{}
+	sink := &fakeSink{err: errors.New("destino fora do ar")}
+	task := taskInState(t, "t1", 3, domain.StateRunning)
+	store.tasks[task.ID] = task
+
+	life := newLifecycle(store, screen).WithEventSink(sink)
+	fixed, err := life.Reconcile(context.Background(), &fakeLock{})
+	if err != nil {
+		t.Fatalf("a fila fora do ar não devia derrubar a reconciliação: %v", err)
+	}
+	if len(fixed) != 1 || task.State != domain.StateFailed {
+		t.Fatalf("a tarefa devia ter sido reconciliada mesmo assim: %s", task.State)
+	}
+}
+
+// Tarefa BLOQUEADA não avisa de novo na reconciliação.
+//
+// Ela já avisou quando bloqueou, e o aviso continua pendente na fila. Repetir a
+// cada boot encheria o destino de duplicatas do mesmo pedido — e um canal que
+// repete é um canal que a pessoa desliga.
+func TestReconcileDoesNotRepublishBlocked(t *testing.T) {
+	store, screen, sink := newFakeStore(), &fakeScreen{}, &fakeSink{}
+	task := taskInState(t, "t1", 2, domain.StateBlocked)
+	store.tasks[task.ID] = task
+
+	life := newLifecycle(store, screen).WithEventSink(sink)
+	if _, err := life.Reconcile(context.Background(), &fakeLock{}); err != nil {
+		t.Fatalf("Reconcile falhou: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("bloqueada não devia gerar aviso novo: %+v", sink.events)
+	}
+}
+
 // Tarefa PENDENTE órfã também é reconciliada.
 //
 // É o processo que morreu entre criar a tarefa e iniciá-la. Sem a transição de

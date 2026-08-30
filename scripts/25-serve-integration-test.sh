@@ -138,18 +138,40 @@ fi
 echo
 echo "=== 9. PROATIVIDADE: o aviso sobrevive a queda da sessao ==="
 # A fila e escrita pelo processo do servico, que nao depende da sessao SSH.
-pending="$(agent_ssh "/usr/local/bin/agentd -notify-drain -state /workspace/agent 2>&1" | tr -d '\r')"
+# Drena como o SERVICO drena (usuario agentd), nao como `agent`.
+#
+# Rodar com o usuario errado devolvia "permission denied" na fila -- e foi assim
+# que se descobriu que a unidade agentd-notify tinha ficado como `agent` depois
+# da separacao de usuarios. O drenador nunca entregaria um aviso em producao, e
+# nada denunciava: um timer que falha a cada disparo nao aparece onde se olha.
+pending="$(agentd_run '-notify-drain -state /workspace/agent' 2>&1 | tr -d '\r')"
 if echo "$pending" | grep -qE "aviso\(s\) pendente|nenhum aviso"; then
   ok "drenador responde: $(echo "$pending" | head -1)"
 else
   fail "drenador nao respondeu como esperado: $pending"
 fi
-# Uma tarefa que falhou ja deve ter enfileirado um aviso.
-if agent_ssh "test -s /workspace/agent/events/events.jsonl" 2>/dev/null; then
-  count="$(agent_ssh "wc -l < /workspace/agent/events/events.jsonl" | tr -d ' \r')"
-  ok "a fila tem $count aviso(s) gravado(s) pelo servico"
+# A secao 8 matou o processo com kill -9 e o reconciliou: isso TEM que ter
+# enfileirado um aviso.
+#
+# Antes esta checagem era um `⚠️` complacente ("fila vazia"), e ela escondia um
+# buraco real: a reconciliacao marcava a tarefa como falhada SEM avisar ninguem
+# -- justamente o caso em que o aviso mais importa, porque quem disparou nao tem
+# como saber que o processo caiu. O silencio parecia o comportamento certo
+# porque tarefa concluida e filtrada de proposito (OnlyKinds blocked+failed).
+#
+# Le por ROOT: a fila e do agentd, e um `wc` sem permissao devolve vazio --
+# indistinguivel de "nao ha aviso".
+queued="$(root_ssh "grep -c . /workspace/agent/events/events.jsonl 2>/dev/null || echo 0" | tr -d ' \r')"
+if [ "${queued:-0}" -gt 0 ]; then
+  ok "a fila tem $queued aviso(s) gravado(s) pelo servico"
+  detail="$(root_ssh "tail -1 /workspace/agent/events/events.jsonl" | tr -d '\r')"
+  if echo "$detail" | grep -q 'reconciliado no boot'; then
+    ok "o aviso da tarefa morta por kill -9 chegou a fila"
+  else
+    fail "a fila tem aviso, mas nao o da reconciliacao: $(echo "$detail" | cut -c1-140)"
+  fi
 else
-  echo "  ⚠️  fila vazia (nenhuma tarefa bloqueou ou falhou ainda)"
+  fail "a fila esta VAZIA depois do kill -9 — a reconciliacao nao avisou"
 fi
 
 echo

@@ -338,7 +338,15 @@ write_files:
 
       [Service]
       Type=oneshot
-      User=agent
+      # agentd, e nao agent: a fila de avisos e ESCRITA pelo servico, que roda
+      # como agentd, e um leitor com outro usuario recebe "permission denied".
+      #
+      # Custou a validacao descobrir. Quando os usuarios foram separados, esta
+      # unidade ficou para tras e o drenador parou de conseguir abrir a fila --
+      # ou seja, a proatividade inteira quebrou EM SILENCIO: os avisos eram
+      # enfileirados normalmente e nunca sairiam. Um timer que falha a cada
+      # disparo nao aparece em lugar nenhum que se olhe por habito.
+      User=agentd
       # O destino vem de um arquivo separado, para trocar o webhook sem editar
       # a unidade. Se ele nao existir, o drenador so lista e nao consome a fila.
       EnvironmentFile=-/etc/agentd/notify.env

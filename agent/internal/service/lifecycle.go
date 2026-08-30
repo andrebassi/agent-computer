@@ -30,11 +30,44 @@ type Lifecycle struct {
 	store  ports.TaskStore
 	screen ports.ScreenDriver
 	clock  Clock
+	// sink enfileira o aviso de tarefa reconciliada. Pode ser nulo.
+	//
+	// Nulo é aceito porque as operações locais (abandonar pela linha de comando)
+	// não montam a fila, e exigir isso obrigaria a construir o adaptador de
+	// eventos só para liberar uma tela.
+	sink ports.EventSink
 }
 
 // NewLifecycle monta as operações de ciclo de vida.
 func NewLifecycle(store ports.TaskStore, screen ports.ScreenDriver, clock Clock) *Lifecycle {
 	return &Lifecycle{store: store, screen: screen, clock: clock}
+}
+
+// WithEventSink liga a fila de avisos e devolve o próprio Lifecycle.
+//
+// Encadeável para a composição não precisar de um construtor a mais.
+func (l *Lifecycle) WithEventSink(sink ports.EventSink) *Lifecycle {
+	l.sink = sink
+	return l
+}
+
+// notify enfileira o aviso da tarefa reconciliada, se houver fila.
+//
+// NUNCA devolve erro: avisar é efeito colateral. Uma fila fora do ar não pode
+// impedir a reconciliação de rodar — e a reconciliação é o que libera a tela.
+// Falhar aqui deixaria a máquina travada por causa do canal de aviso.
+func (l *Lifecycle) notify(ctx context.Context, task *domain.Task) {
+	if l.sink == nil {
+		return
+	}
+	// Sem resumo: a conversa dessa tarefa morreu junto com o processo, e ler o
+	// disco para montar um resumo daria a resposta parcial de um turno que nunca
+	// terminou -- pior que nenhuma.
+	event, ok := domain.NewTaskEvent(task, "", l.clock())
+	if !ok {
+		return
+	}
+	_ = l.sink.Publish(ctx, event)
 }
 
 // Abandon desiste de uma tarefa ativa e LIBERA a tela.
@@ -109,6 +142,14 @@ func (l *Lifecycle) Reconcile(ctx context.Context, lock ports.ScreenLock) ([]*do
 		}
 		_ = l.screen.ClearTakeover(ctx, task.Screen)
 		_ = l.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
+		// AVISA. Sem isto, a tarefa morta por `kill -9` virava `failed` em
+		// silêncio -- e é justamente o caso em que o aviso mais importa: quem
+		// disparou não tem como saber que o processo caiu, e a tela volta a
+		// ficar livre como se nada tivesse acontecido.
+		//
+		// Medido em 30/08/2026: o teste da porta HTTP passava com a fila vazia,
+		// porque `done` é filtrado de propósito e nada mais chegava a enfileirar.
+		l.notify(ctx, task)
 		fixed = append(fixed, task)
 	}
 	return fixed, nil

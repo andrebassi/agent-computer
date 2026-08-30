@@ -44,7 +44,10 @@ func serve(ctx context.Context, d *deps, listenAddr, tokenFile string, taskTimeo
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	logger.Info("token da porta HTTP carregado", "origem", tokenSource)
-	life := service.NewLifecycle(d.store, d.screen, time.Now)
+	// A fila entra aqui: tarefa reconciliada no boot AVISA. Sem isto, a que
+	// morreu por `kill -9` virava `failed` em silêncio, e quem a disparou não
+	// tinha como saber que o processo caiu.
+	life := service.NewLifecycle(d.store, d.screen, time.Now).WithEventSink(d.sink)
 
 	// RECONCILIAÇÃO ANTES DO LISTENER.
 	//
