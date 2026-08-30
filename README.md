@@ -195,7 +195,36 @@ trabalho **continua no volume** por US$ 2/mês. `task up` traz tudo de volta.
 | tela de catálogo (`Settings → Plugins`) | ❌ é interface, não infraestrutura |
 | secret request como fluxo de tela | ⚠️ o tipo e a garantia existem; falta a tela |
 
-### Divergência: cookies não são compartilhados entre telas
+### Sessão entre telas: semeadura e propagação, não compartilhamento
+
+A documentação diz que logar num site por um agente deixa a sessão disponível
+para os outros. **Compartilhamento literal é impossível**: o Chrome mantém um
+`SingletonLock` no perfil e recusa um segundo processo no mesmo diretório —
+verificado na máquina, a trava aponta para `<host>-<pid>`.
+
+O que existe são dois mecanismos que entregam o efeito prático:
+
+| Mecanismo | Quando | O que faz |
+|---|---|---|
+| **semeadura** | `screen-add N` | a tela nova nasce com cópia do perfil da tela 1 |
+| **propagação** | `session-sync 1 2` | leva a sessão de uma tela para outra, depois |
+
+Isso funciona por um detalhe que não é óbvio: o Chrome sobe com
+`--password-store=basic`, e nesse modo os cookies são cifrados com **chave
+fixa**, não com o chaveiro do usuário. Com o chaveiro, a cópia produziria um
+perfil cujos cookies não descriptografam — e o sintoma seria "deslogado", sem
+erro nenhum.
+
+**O que continua diferente da documentação:** não há sincronização contínua. Um
+login feito agora na tela 1 não aparece sozinho na tela 2; é preciso rodar
+`session-sync`. Sincronizar de verdade exigiria dois processos escrevendo no
+mesmo SQLite de cookies, que corrompe.
+
+O `session-sync` para o Chrome do **destino** antes de copiar, guarda o perfil
+anterior em `screen-N.anterior`, e **reverte sozinho** se o navegador não
+religar.
+
+### Detalhe descartado: o que não deu certo
 
 Na doc, logar num site por um bot deixa a sessão disponível para os outros. Aqui
 cada tela tem perfil próprio, porque o Chrome trava o `user-data-dir` e recusa um
@@ -288,8 +317,8 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
 - [x] ~~Catálogo de conectores~~ — `agentd -catalog list|install|remove|skill-save`
 - [x] ~~Detecção de computador inalcançável~~ — `task health`, que separa os quatro
       diagnósticos e indica a recuperação **menos destrutiva primeiro**
-- [ ] **Cookies compartilhados entre telas** — divergência com motivo técnico; os
-      quatro contornos avaliados estão documentados, nenhum é limpo
+- [~] **Sessão entre telas** — semeadura e propagação implementadas e testadas na
+      máquina; sincronização contínua continua impossível (o Chrome trava o perfil)
 - [x] ~~Tailscale autenticado~~ — na malha como `agent-computer`; os scripts
       preferem a malha, com o IP público como reserva testada
 - [ ] **KasmVNC** — daria resolução dinâmica no lugar do 1920×1080 fixo; avaliar exige
