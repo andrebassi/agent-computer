@@ -473,3 +473,39 @@ func TestStatusIsPushedToTheScreen(t *testing.T) {
 		t.Fatal("o status devia dizer qual ferramenta está em uso")
 	}
 }
+
+// A lista de ferramentas enviada ao modelo precisa ter ordem ESTÁVEL.
+//
+// `a.tools` é um mapa, e iterar mapa em Go dá ordem diferente a cada chamada.
+// Prefixo de prompt instável invalida o cache do fornecedor — 75% de desconto no
+// token de entrada, na xAI. Sem ordenar, cada iteração pagava preço cheio por um
+// prompt quase idêntico ao anterior.
+//
+// Com dez ferramentas, a chance de duas iterações coincidirem por acaso é
+// desprezível; o teste repete para não depender de sorte.
+func TestToolSpecsAreDeterministic(t *testing.T) {
+	tools := make([]ports.Tool, 0, 10)
+	for _, name := range []string{"zeta", "alfa", "mike", "bravo", "yankee", "charlie", "xray", "delta", "whiskey", "echo"} {
+		tools = append(tools, &fakeTool{name: name})
+	}
+	agent := newAgent(&fakeModel{}, tools, &fakeScreen{}, newFakeStore(), &fakeLock{})
+
+	first := agent.toolSpecs()
+	for i := 0; i < 20; i++ {
+		again := agent.toolSpecs()
+		if len(again) != len(first) {
+			t.Fatalf("tamanho mudou entre chamadas: %d vs %d", len(first), len(again))
+		}
+		for j := range first {
+			if first[j].Name != again[j].Name {
+				t.Fatalf("ordem mudou na posição %d: %q vs %q (iteração %d)",
+					j, first[j].Name, again[j].Name, i)
+			}
+		}
+	}
+	// Ordem estável por acaso não basta: precisa ser a alfabética, que é
+	// reproduzível entre PROCESSOS, e não só dentro de um.
+	if first[0].Name != "alfa" || first[len(first)-1].Name != "zeta" {
+		t.Fatalf("esperava ordem alfabética, veio %q..%q", first[0].Name, first[len(first)-1].Name)
+	}
+}

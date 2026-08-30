@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -249,12 +250,22 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 	return a.iterate(ctx, task, conv)
 }
 
-// toolSpecs monta a lista de ferramentas oferecidas ao modelo.
+// toolSpecs monta a lista de ferramentas oferecidas ao modelo, em ordem estável.
+//
+// A ordenação não é estética: `a.tools` é um MAPA, e iterar um mapa em Go dá
+// ordem diferente a cada chamada. Isso muda o prefixo do prompt entre iterações
+// da MESMA tarefa, e prefixo instável invalida o cache do fornecedor — que na
+// xAI vale 75% de desconto no token de entrada (US$ 0,50/M contra 2,00).
+//
+// Ou seja: sem estas duas linhas, cada iteração pagava preço cheio por um
+// prompt praticamente idêntico ao anterior. E, de quebra, o comportamento do
+// agente deixava de ser reproduzível entre execuções.
 func (a *Agent) toolSpecs() []ports.ToolSpec {
 	specs := make([]ports.ToolSpec, 0, len(a.tools))
 	for _, t := range a.tools {
 		specs = append(specs, t.Spec())
 	}
+	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	return specs
 }
 
