@@ -261,7 +261,7 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
 ## Pendências
 
 - [ ] Tailscale instalado, **não autenticado** (sem authkey no cofre)
-- [ ] Claude Code 2.1.251 instalado, **sem auth decidida** — nenhum agente roda ainda
+- [x] ~~Nenhum agente roda~~ — o agente Grok roda e foi validado ponta a ponta em 30/08
 - [ ] Cookies compartilhados entre telas (divergência acima)
 - [ ] Tela de coleta do secret request (o tipo e a garantia já existem)
 - [ ] Detecção de computador inalcançável, para disparar o recover sozinho
