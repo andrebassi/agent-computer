@@ -267,3 +267,83 @@ func TestSkipOrphanToolResults(t *testing.T) {
 		})
 	}
 }
+
+// A resposta da tarefa é a última fala do assistente COM conteúdo.
+//
+// Turnos em que o modelo só chamou ferramenta têm conteúdo vazio e são pulados:
+// eles são o COMO, e quem pergunta "o que deu?" quer o quê.
+func TestLastAnswerSkipsToolOnlyTurns(t *testing.T) {
+	conv := NewConversation("t1", "regras")
+	conv.AddUser("conte os núcleos")
+	conv.AddAssistant("vou olhar", nil)
+	conv.AddAssistant("", []ToolCall{{ID: "c1", Name: "shell", Arguments: "{}"}})
+	if err := conv.AddToolResult("c1", "4"); err != nil {
+		t.Fatalf("preparação falhou: %v", err)
+	}
+	conv.AddAssistant("são 4 núcleos", nil)
+
+	if got := conv.LastAnswer(); got != "são 4 núcleos" {
+		t.Fatalf("esperava a última fala com conteúdo, veio %q", got)
+	}
+}
+
+// Sem resposta, devolve vazio — e vazio significa vazio.
+//
+// Nenhum texto de preenchimento entra aqui: um "tarefa concluída" inventado
+// apareceria no aviso de quem recebe como se o agente tivesse dito algo.
+func TestLastAnswerIsEmptyWhenNothingWasSaid(t *testing.T) {
+	casos := []struct {
+		nome  string
+		monta func() *Conversation
+	}{
+		{"conversa nova", func() *Conversation { return NewConversation("t1", "regras") }},
+		{"só chamada de ferramenta", func() *Conversation {
+			c := NewConversation("t1", "regras")
+			c.AddUser("faça")
+			c.AddAssistant("", []ToolCall{{ID: "c1", Name: "shell", Arguments: "{}"}})
+			return c
+		}},
+	}
+	for _, caso := range casos {
+		t.Run(caso.nome, func(t *testing.T) {
+			if got := caso.monta().LastAnswer(); got != "" {
+				t.Fatalf("esperava vazio, veio %q", got)
+			}
+		})
+	}
+}
+
+// Nota de sistema registra o que aconteceu FORA da conversa.
+//
+// Entra como sistema porque não é fala de pessoa nem do modelo — confundir os
+// três papéis faria o modelo responder a uma nota de infraestrutura como se
+// fosse pedido.
+func TestAddSystemNote(t *testing.T) {
+	conv := NewConversation("t1", "regras")
+	if err := conv.AddSystemNote("aviso não entregue: sem rede"); err != nil {
+		t.Fatalf("AddSystemNote falhou: %v", err)
+	}
+	last := conv.Messages[len(conv.Messages)-1]
+	if last.Role != RoleSystem || !strings.Contains(last.Content, "sem rede") {
+		t.Fatalf("nota errada: %+v", last)
+	}
+	if err := conv.AddSystemNote(""); err == nil {
+		t.Fatal("nota vazia devia ser recusada")
+	}
+}
+
+// A nota passa pela limpeza de segredos, como qualquer outro conteúdo.
+//
+// Uma mensagem de erro pode carregar a credencial que causou a falha, e ela iria
+// para o histórico — que é gravado em disco e relido a cada iteração.
+func TestSystemNoteIsRedacted(t *testing.T) {
+	conv := NewConversation("t1", "regras")
+	conv.TrackSecret("senha-secreta")
+	if err := conv.AddSystemNote("falhou ao autenticar com senha-secreta"); err != nil {
+		t.Fatalf("AddSystemNote falhou: %v", err)
+	}
+	last := conv.Messages[len(conv.Messages)-1]
+	if strings.Contains(last.Content, "senha-secreta") {
+		t.Fatalf("o segredo vazou para o histórico: %q", last.Content)
+	}
+}

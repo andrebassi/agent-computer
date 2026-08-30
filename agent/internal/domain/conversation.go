@@ -185,6 +185,46 @@ func (c *Conversation) Compact() bool {
 	return true
 }
 
+// LastAnswer devolve a última fala do assistente que tem conteúdo — a RESPOSTA
+// da tarefa.
+//
+// Mora no domínio porque é regra de produto, não de transporte: "a resposta é a
+// última fala do assistente com conteúdo" vale igual para quem lê pelo terminal,
+// por HTTP ou por um aviso de chat. Ter isso escrito uma vez impede que as três
+// pontas discordem sobre o que a tarefa respondeu.
+//
+// Turnos em que o modelo só chamou ferramenta têm conteúdo vazio e são pulados:
+// eles são o COMO, e quem pergunta "o que deu?" quer o quê.
+//
+// Devolve string vazia quando não há resposta, e vazio significa vazio — nenhum
+// texto de preenchimento entra aqui.
+func (c *Conversation) LastAnswer() string {
+	for i := len(c.Messages) - 1; i >= 0; i-- {
+		m := c.Messages[i]
+		if m.Role == RoleAssistant && m.Content != "" {
+			return m.Content
+		}
+	}
+	return ""
+}
+
+// AddSystemNote registra no histórico algo que aconteceu FORA da conversa.
+//
+// Serve para o que o agente precisa saber mas ninguém disse a ele: um aviso que
+// não foi entregue, uma reconciliação feita no boot. Entra como mensagem de
+// sistema porque não é fala de pessoa nem do modelo, e confundir os três papéis
+// faria o modelo responder a uma nota de infraestrutura como se fosse pedido.
+func (c *Conversation) AddSystemNote(note string) error {
+	if note == "" {
+		return fmt.Errorf("nota vazia")
+	}
+	c.Messages = append(c.Messages, Message{
+		Role:    RoleSystem,
+		Content: Redact(note, c.secrets),
+	})
+	return nil
+}
+
 // Summary devolve uma linha por mensagem, para diagnóstico. Usa o conteúdo já
 // limpo de segredos, então é seguro imprimir.
 func (c *Conversation) Summary() string {

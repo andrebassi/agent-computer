@@ -35,13 +35,44 @@ type Clock func() time.Time
 
 // Agent roda tarefas numa tela.
 type Agent struct {
-	model   ports.LanguageModel
-	tools   map[string]ports.Tool
-	screen  ports.ScreenDriver
-	store   ports.TaskStore
-	lock    ports.ScreenLock
-	clock   Clock
+	model     ports.LanguageModel
+	tools     map[string]ports.Tool
+	screen    ports.ScreenDriver
+	store     ports.TaskStore
+	lock      ports.ScreenLock
+	clock     Clock
 	sysPrompt string
+	// sink publica os fatos da tarefa para fora. Nunca é nil — o padrão descarta
+	// tudo, o que evita uma checagem em cada ponto de publicação.
+	sink ports.EventSink
+}
+
+// discardSink é o destino padrão: descarta tudo.
+//
+// Mora AQUI, e não no adaptador de eventos, por causa da direção das setas: o
+// serviço depende de portos, nunca de adaptadores. Importar o pacote de
+// adaptadores só para pegar um objeto vazio inverteria a dependência que a
+// arquitetura inteira existe para manter.
+type discardSink struct{}
+
+// Publish descarta o fato sem fazer nada.
+func (discardSink) Publish(context.Context, domain.TaskEvent) error { return nil }
+
+// Option configura o agente sem mudar a assinatura de NewAgent.
+//
+// Existe para acrescentar dependências opcionais sem quebrar as chamadas atuais:
+// um oitavo parâmetro posicional obrigaria a editar o ponto de composição e
+// todos os testes, e cada edição dessas é uma chance de trocar a ordem de dois
+// argumentos do mesmo tipo sem o compilador notar.
+type Option func(*Agent)
+
+// WithEventSink liga o agente a um destino de eventos.
+func WithEventSink(sink ports.EventSink) Option {
+	return func(a *Agent) {
+		if sink != nil {
+			a.sink = sink
+		}
+	}
 }
 
 // NewAgent monta o agente com suas dependências. Todas são interfaces: o teste
@@ -54,15 +85,24 @@ func NewAgent(
 	lock ports.ScreenLock,
 	clock Clock,
 	systemPrompt string,
+	opts ...Option,
 ) *Agent {
 	byName := make(map[string]ports.Tool, len(tools))
 	for _, t := range tools {
 		byName[t.Spec().Name] = t
 	}
-	return &Agent{
+	agent := &Agent{
 		model: model, tools: byName, screen: screen,
 		store: store, lock: lock, clock: clock, sysPrompt: systemPrompt,
+		// Descartar por padrão, e não nil: sem destino configurado o agente
+		// funciona igual, e não há um caminho onde esquecer a checagem de nil
+		// vire pânico em produção.
+		sink: discardSink{},
 	}
+	for _, opt := range opts {
+		opt(agent)
+	}
+	return agent
 }
 
 // Run executa uma tarefa do início ao fim, ou até ela bloquear pedindo uma
@@ -119,7 +159,10 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 		completion, err := a.complete(ctx, conv, specs)
 		if err != nil {
 			_ = task.Fail(fmt.Sprintf("modelo falhou: %v", err), a.clock())
-			_ = a.persist(ctx, task)
+			// settle, e não persist: sem isto a tarefa morria em SILÊNCIO —
+			// gravava o estado e ninguém era avisado. É o caminho de falha, que
+			// é justamente quando alguém precisa saber.
+			_ = a.settle(ctx, task, conv)
 			return err
 		}
 
@@ -198,7 +241,35 @@ func (a *Agent) settle(ctx context.Context, task *domain.Task, conv *domain.Conv
 	if err := a.store.SaveConversation(ctx, conv); err != nil {
 		return fmt.Errorf("gravando conversa: %w", err)
 	}
-	return a.persist(ctx, task)
+	if err := a.persist(ctx, task); err != nil {
+		return err
+	}
+	a.publish(ctx, task, conv)
+	return nil
+}
+
+// publish avisa o mundo de fora que a tarefa parou.
+//
+// Não devolve erro, e isso é o contrato: avisar é EFEITO COLATERAL. Um destino
+// fora do ar não pode transformar tarefa concluída em tarefa falhada — o
+// trabalho foi feito, e o disco já registrou. Falha aqui vira relato no próprio
+// histórico, que é onde alguém procuraria depois.
+//
+// Vem depois do durável de propósito: se o processo morrer no meio, quem
+// consulta o disco vê a verdade. O inverso avisaria "concluída" com o disco
+// dizendo outra coisa.
+func (a *Agent) publish(ctx context.Context, task *domain.Task, conv *domain.Conversation) {
+	event, ok := domain.NewTaskEvent(task, conv.LastAnswer(), a.clock())
+	if !ok {
+		return
+	}
+	if err := a.sink.Publish(ctx, event); err != nil {
+		// O aviso falhou, mas a tarefa não. Registrar no histórico é melhor que
+		// engolir: quem for ler a conversa descobre que houve um aviso perdido,
+		// em vez de concluir que nunca houve o que avisar.
+		_ = conv.AddSystemNote(fmt.Sprintf("aviso não entregue: %v", err))
+		_ = a.store.SaveConversation(ctx, conv)
+	}
 }
 
 // runTool executa uma chamada e devolve se ela bloqueou a tarefa.

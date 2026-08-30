@@ -106,6 +106,22 @@ type ScreenLock interface {
 	Acquire(ctx context.Context, screen int, taskID string) (release func() error, err error)
 }
 
+// EventSink publica fatos da tarefa para fora do agente.
+//
+// É porto de SAÍDA e NÃO sabe qual é o canal — chat, webhook, arquivo, todos
+// eles. O requisito duro veio de uma lição cara do projeto anterior: a
+// publicação não pode depender da conexão que iniciou a tarefa. Uma tarefa
+// disparada por SSH que bloqueia depois de a sessão cair precisa avisar do mesmo
+// jeito, e lá a única saída tinha sido derrubar o serviço para poder falar.
+type EventSink interface {
+	// Publish entrega o fato.
+	//
+	// NUNCA devolve erro que derrube a tarefa: avisar é efeito colateral, e um
+	// destino fora do ar não pode transformar tarefa concluída em tarefa
+	// falhada. Quem implementa devolve erro para ser REGISTRADO, não propagado.
+	Publish(ctx context.Context, event domain.TaskEvent) error
+}
+
 // SecretPrompter pede um valor sigiloso diretamente na tela.
 //
 // O valor devolvido nunca passa pelo modelo: quem chama entrega direto ao
