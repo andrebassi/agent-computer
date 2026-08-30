@@ -30,4 +30,4 @@ echo "criando snapshot '$snap'"
 timeout 900s doctl compute volume snapshot "$vol_id" --snapshot-name "$snap" --format ID,Name,Size
 
 echo "OK. Snapshots do volume:"
-timeout 30s doctl compute snapshot list --resource volume --format Name,ID,Size,Created | grep -E "Name|$VOLUME_NAME"
+timeout 30s doctl compute snapshot list --resource volume  --format Name,ID,Size,CreatedAt | grep -E "Name|$VOLUME_NAME"
