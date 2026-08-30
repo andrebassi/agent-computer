@@ -66,7 +66,10 @@ func newHTTPTool(lc *loadedConnector, op ManifestOperation, secrets *secretref.R
 		auth:          lc.manifest.Auth,
 		secretPath:    secretPath,
 		secrets:       secrets,
-		client:        &http.Client{Timeout: httpTimeout},
+		// Cliente com discador que valida o IP DE DESTINO na hora de conectar.
+		// `validateBaseURL` recusa o IP literal do metadata, mas um NOME que
+		// resolve para ele passava -- ver dialer.go.
+		client: newGuardedClient(httpTimeout),
 	}
 }
 

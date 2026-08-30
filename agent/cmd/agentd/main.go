@@ -75,6 +75,7 @@ func main() {
 		taskTimeout  = flag.Duration("task-timeout", 2*time.Hour, "teto de tempo de uma tarefa")
 		vaultInit    = flag.Bool("vault-init", false, "cria o cofre e grava segredos lidos como chave=valor na entrada padrão")
 		vaultCheck   = flag.Bool("vault-check", false, "confere se o cofre ABRE com a identidade desta máquina")
+		connProbe    = flag.String("connector-probe", "", "tenta alcançar uma URL pelo mesmo caminho de um conector, e diz o que aconteceu")
 	)
 	flag.Parse()
 
@@ -84,7 +85,8 @@ func main() {
 		listen: *listenAddr, tokenFile: *tokenFile, taskTimeout: *taskTimeout,
 		resume: *resume, abandon: *abandon, catalog: *catalog, drain: *notifyDrain,
 		serve: *serveHTTP, vaultInit: *vaultInit, vaultCheck: *vaultCheck,
-		rest: flag.Args(),
+		connectorProbe: *connProbe,
+		rest:           flag.Args(),
 	}
 	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
@@ -105,6 +107,7 @@ type runOptions struct {
 	taskTimeout                     time.Duration
 	resume, abandon, catalog, drain bool
 	serve, vaultInit, vaultCheck    bool
+	connectorProbe                  string
 	rest                            []string
 }
 
@@ -135,6 +138,17 @@ func run(o runOptions) error {
 	// pior desfecho possivel, porque parece ter funcionado.
 	if o.vaultCheck {
 		return runVaultCheck(context.Background(), stateDir)
+	}
+
+	// Sondar destino de conector nao depende de cofre nem de modelo: e uma
+	// requisicao GET pelo mesmo cliente que as ferramentas de conector usam.
+	//
+	// Existe pelo mesmo motivo do `-vault-check`: e a unica forma de provar NA
+	// MAQUINA que um destino interno e recusado. No Mac nao ha metadata de nuvem
+	// para alcancar, e um teste que passa aqui e la por motivos diferentes nao
+	// prova a mesma coisa.
+	if o.connectorProbe != "" {
+		return runConnectorProbe(context.Background(), o.connectorProbe)
 	}
 
 	// Gerenciar catálogo é operação local, como abandonar: nada de modelo nem

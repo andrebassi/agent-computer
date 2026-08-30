@@ -139,6 +139,12 @@ tasks:
       - ./scripts/21-web-search-test.sh 2>&1 | tee logs/web-search-test.log
       - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
 
+  ssrf-test:
+    desc: 'Prova que conector não alcança a rede interna — nem por NOME que resolve para lá'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/35-connector-ssrf-test.sh 2>&1 | tee logs/ssrf-test.log
+
   hostile:
     desc: 'Teste HOSTIL: entrada malformada, corpo gigante, auth sob ataque, degradação e concorrência'
     cmds:
@@ -159,6 +165,7 @@ tasks:
       - ./scripts/27-privilege-test.sh 2>&1 | tee logs/privilege-test.log
       - ./scripts/25-serve-integration-test.sh 2>&1 | tee logs/serve-test.log
       - ./scripts/32-end-to-end.sh 2>&1 | tee logs/e2e.log
+      - ./scripts/35-connector-ssrf-test.sh 2>&1 | tee logs/ssrf-test.log
 
   privilege-test:
     desc: 'Prova adversarial: o modelo não alcança o cofre, não vira root, não troca o binário'

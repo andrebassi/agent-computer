@@ -66,6 +66,9 @@ domínio e os adapters com dublê. **Não** cobrem fiação, permissão nem cami
 | catálogo chega ao modelo | `32-end-to-end` | 6 |
 | estado sobrevive a restart | `32-end-to-end` | 8 |
 | **contrato igual nos dois caminhos de deploy** | `32-end-to-end` | 12 |
+| **conector não alcança a rede interna, nem por nome** | `35-connector-ssrf-test` | 2, 3 |
+| o metadata da nuvem existe (senão o teste não prova nada) | `35-connector-ssrf-test` | 1 |
+| **conector legítimo continua alcançando fora** | `35-connector-ssrf-test` | 4 |
 
 ## Camada 3 — funcional (`task functional`, chama o modelo)
 
@@ -207,7 +210,7 @@ a unidade. Quem cria e ajusta esses diretórios é o oneshot
 | `request_secret` (pedido de senha na tela) | precisa de terminal interativo; há teste em processo, não na máquina |
 | `browser_fill` e `browser_click` isolados | exercitados de through pela delegação, não por teste próprio |
 | retenção de conversa | não existe expurgo; a saída de ferramenta fica no volume para sempre (ver `SECURITY.md`) |
-| `baseURL` de conector por NOME | o IP literal é recusado; nome que resolve para o metadata passa |
+
 
 ## Histórico: o que cada camada achou
 

@@ -61,7 +61,11 @@ func validateBaseURL(raw string) error {
 		// Nome, não IP. Passa — ver a nota sobre DNS acima.
 		return nil
 	}
-	if isInternal(ip) {
+	// `blockedIP`, e não `isInternal` direto: a política de bloqueio é UMA, e o
+	// cadastro tem de julgar exatamente como o discador. Duas cópias do mesmo
+	// julgamento divergem na primeira vez que uma faixa for acrescentada só num
+	// dos lados -- e a que ficar para trás vira o buraco.
+	if blockedIP(ip) {
 		return fmt.Errorf("%w: %s", ErrUnsafeBaseURL, ip)
 	}
 	return nil

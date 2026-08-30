@@ -162,13 +162,54 @@ mecanismo — identidade junto do store tornaria a foto autossuficiente.
 
 ---
 
+## Fechado em 30/08/2026: conector não alcança a rede interna
+
+Estava aberto e agora não está. `validateBaseURL` recusava o IP literal —
+link-local (`169.254.0.0/16` inteira), loopback, faixa privada, CGNAT e esquema
+fora de http/https — mas um **nome** que resolve para lá passava.
+
+A correção não foi resolver o nome no cadastro, e o motivo importa: três
+caminhos escapam de qualquer checagem feita antes da conexão.
+
+| Caminho | Por que a validação de cadastro não pega |
+|---|---|
+| rebinding de DNS | o cadastro viu um IP público; a chamada vai para outro |
+| redirect 302 | a URL validada não é a que o servidor mandou seguir |
+| registros múltiplos | o resolvedor devolve o interno na segunda consulta |
+
+Fechado no **discador** (`connectors/dialer.go`), que vê o IP final no instante
+de abrir o socket — sem janela entre a checagem e o uso. Um endereço interno na
+lista resolvida reprova a conexão inteira, em vez de a função pular para o
+próximo: um nome que devolve um público e um interno é exatamente a forma do
+ataque.
+
+Duas decisões que valem registro:
+
+- **transporte próprio, não `http.DefaultTransport`** — mexer no padrão
+  afetaria toda chamada HTTP do processo, inclusive a do modelo; a intenção é
+  restringir só o que sai em nome do conector;
+- **discar em todos os endereços resolvidos**, e não no primeiro. Parar no
+  primeiro parece equivalente e quebra `localhost` (resolve para `::1` antes de
+  `127.0.0.1`) — custou sete testes de conector antes de aparecer.
+
+O limite continua o mesmo, e é honesto dizê-lo: **a ferramenta de shell alcança
+a rede interna diretamente**, e nada aqui a limita. O que se fechou é o caminho
+que o `agentd` percorre EM NOME do modelo, dentro do processo que tem o cofre
+aberto — onde a credencial do conector seria anexada à requisição.
+
+Verificado na máquina por `task ssrf-test`, com prova de falha nos dois
+sentidos: com o discador desarmado o teste reprovou mostrando o vazamento
+(`HTTP 200 {"status":"ok"}` — a porta de tarefas interna, alcançada pelo nome);
+restaurado, `erros: 0`.
+
+---
+
 ## O que continua aberto
 
 Registrado, não escondido.
 
 | | Estado |
 |---|---|
-| **`baseURL` resolvido por NOME** | o IP literal é recusado — link-local (a faixa `169.254.0.0/16` inteira), loopback, faixa privada, CGNAT e esquema fora de http/https. Um NOME que resolve para o metadata ainda passa: validar no cadastro não ajudaria, porque o DNS pode responder outra coisa na hora da chamada. Fechar exige discador que valide o IP na conexão |
 | **Conversa não expira** | a saída de toda ferramenta fica no volume para sempre, e entra em cada foto. Se o modelo leu um segredo em algum momento, ele está gravado ali. Sem expurgo nem redação |
 | **`NoNewPrivileges` desligado no `agentd-api`** | e **de propósito**: o rebaixamento usa `sudo`, que é setuid. Ligar quebraria justamente o mecanismo que tira o cofre do alcance do modelo |
 | **Root na máquina lê tudo** | cofre é cifra em repouso mais separação de usuário, não isolamento contra root. Quem tem a chave SSH de root do Mac contorna tudo — e é assim que o deploy funciona |

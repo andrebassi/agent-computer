@@ -518,6 +518,8 @@ func installForServer(t *testing.T, r *Registry, url string, op ManifestOperatio
 
 // O caminho normal de uma chamada: parâmetro no caminho, resposta de volta.
 func TestHTTPToolCallsAPIAndReturnsBody(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seenPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seenPath = req.URL.Path
@@ -550,6 +552,8 @@ func TestHTTPToolCallsAPIAndReturnsBody(t *testing.T) {
 // Parâmetro que não entra no caminho vai para a query, e o que o manifesto
 // declarar como corpo vai no corpo — valores em query acabam em log de servidor.
 func TestHTTPToolSeparatesQueryFromBody(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seenQuery, seenBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seenQuery = req.URL.RawQuery
@@ -580,6 +584,8 @@ func TestHTTPToolSeparatesQueryFromBody(t *testing.T) {
 
 // A credencial vira cabeçalho de autorização.
 func TestHTTPToolAppliesBearerAuth(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seenAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seenAuth = req.Header.Get("Authorization")
@@ -625,6 +631,8 @@ func TestHTTPToolReportsMissingCredential(t *testing.T) {
 // Erro HTTP volta como texto para o modelo decidir. Um 404 costuma significar
 // parâmetro errado, e vê-lo permite corrigir na iteração seguinte.
 func TestHTTPToolReturnsHTTPErrorAsText(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"message":"Not Found"}`)
@@ -665,6 +673,8 @@ func TestHTTPToolHandlesMalformedArguments(t *testing.T) {
 
 // Autenticação por cabeçalho próprio, que várias APIs usam no lugar de Bearer.
 func TestHTTPToolAppliesCustomHeaderAuth(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seen string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seen = req.Header.Get("X-Api-Key")
@@ -691,6 +701,8 @@ func TestHTTPToolAppliesCustomHeaderAuth(t *testing.T) {
 // Credencial em query string acaba em log de servidor. É suportado porque
 // algumas APIs só oferecem isso, mas o manifesto precisa pedir explicitamente.
 func TestHTTPToolAppliesQueryAuth(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seen string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seen = req.URL.Query().Get("api_key")
@@ -756,6 +768,8 @@ func TestHTTPToolHandlesNetworkFailure(t *testing.T) {
 
 // Operação sem método declarado usa GET, que é o caso mais comum de leitura.
 func TestHTTPToolDefaultsToGet(t *testing.T) {
+	// O servidor de teste escuta em loopback, que o discador recusa por desenho.
+	allowLoopbackForTest(t)
 	var seen string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		seen = req.Method
