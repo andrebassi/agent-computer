@@ -337,8 +337,24 @@ errada. Agora separa três estados e aborta na hora se o YAML foi recusado.
       máquina; sincronização contínua continua impossível (o Chrome trava o perfil)
 - [x] ~~Tailscale autenticado~~ — na malha como `agent-computer`; os scripts
       preferem a malha, com o IP público como reserva testada
-- [ ] **KasmVNC** — daria resolução dinâmica no lugar do 1920×1080 fixo; avaliar exige
-      subir o droplet e medir, e o ganho é conforto, não capacidade
+- [x] ~~KasmVNC~~ — **avaliado e medido**: −82% de memória (424 MB → 74 MB por tela)
+      e resolução dinâmica que o Xvfb recusa. Decisão registrada: **não trocar agora**,
+      porque nada está limitando; gatilho é precisar de mais de três telas
+
+### A lacuna funcional, e é a maior
+
+- [ ] **O agente não pilota o navegador.** Há `shell`, `request_takeover` e os
+      conectores. O Chrome está de pé e a porta de depuração aberta em
+      `127.0.0.1:922N`, mas **nenhuma ferramenta as usa** — a tela serve para a
+      pessoa assumir e assistir, não para o agente navegar.
+
+      Consequência prática: tudo que a documentação descreve sobre navegar em
+      site, logar e clicar depende hoje de *você* fazer na tela. O agente resolve
+      o que couber em API e linha de comando.
+
+      Fechar isso é acrescentar uma ferramenta que fale CDP com a porta local —
+      navegar, clicar, ler o DOM, capturar tela. O caminho está aberto e o
+      protocolo é o mesmo que o Claude in Chrome usa; falta o código.
 
 ### A pendência que não é técnica
 
