@@ -25,8 +25,8 @@ ssh -i "$SSH_KEY_FILE" \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
     -N -f \
-    -L "${LOCAL_VNC_PORT}:127.0.0.1:6080" \
-    -L "${LOCAL_CDP_PORT}:127.0.0.1:9222" \
+    -L "${LOCAL_VNC_PORT}:127.0.0.1:6081" \
+    -L "${LOCAL_CDP_PORT}:127.0.0.1:9221" \
     "agent@${ip}"
 
 sleep 2

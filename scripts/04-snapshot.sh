@@ -8,20 +8,26 @@ source "$(dirname "$0")/lib.sh"
 set -euo pipefail
 load_token
 
-id="$(droplet_id)"
-[ -z "$id" ] && { echo "🛑 droplet nao existe"; exit 1; }
+# Snapshot do VOLUME, nao do droplet: depois que /workspace passou a morar num
+# volume separado, o disco do droplet virou descartavel por construcao -- nada
+# durave mora la. Snapshot de volume tambem e mais barato e muito mais rapido.
+vol_id="$(timeout 30s doctl compute volume list --format ID,Name --no-header \
+  | awk -v n="$VOLUME_NAME" '$2==n{print $1}')"
+[ -z "$vol_id" ] && { echo "volume '$VOLUME_NAME' nao existe"; exit 1; }
 
 stamp="$(date +%Y%m%d-%H%M)"
-snap="${DROPLET_NAME}-${stamp}"
+snap="${VOLUME_NAME}-${stamp}"
 
-echo "desligando droplet (snapshot a quente corrompe o perfil do navegador)"
-timeout 180s doctl compute droplet-action power-off "$id" --wait
+# sync antes: o snapshot le o volume como esta no disco, e escrita ainda em
+# cache de pagina nao entra nele.
+id="$(droplet_id)"
+if [ -n "$id" ]; then
+  echo "descarregando cache de escrita no volume"
+  agent_ssh 'sync; sudo sync' 2>/dev/null || true
+fi
 
-echo "criando snapshot '$snap' (leva alguns minutos)"
-timeout 900s doctl compute droplet-action snapshot "$id" --snapshot-name "$snap" --wait
+echo "criando snapshot '$snap'"
+timeout 900s doctl compute volume snapshot "$vol_id" --snapshot-name "$snap" --format ID,Name,Size
 
-echo "religando droplet"
-timeout 180s doctl compute droplet-action power-on "$id" --wait
-
-echo "✅ snapshot '$snap' pronto"
-timeout 30s doctl compute snapshot list --resource droplet --format Name,ID,Size,Created | grep -E "Name|$snap"
+echo "OK. Snapshots do volume:"
+timeout 30s doctl compute snapshot list --resource volume --format Name,ID,Size,Created | grep -E "Name|$VOLUME_NAME"

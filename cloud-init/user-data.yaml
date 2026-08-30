@@ -64,15 +64,15 @@ write_files:
   # --- Servidor X virtual -----------------------------------------------
   # Resolucao fixa em 1920x1080: o mesmo canvas dos decks do dono, e evita
   # depender de redimensionamento dinamico (que o x11vnc nao entrega bem).
-  - path: /etc/systemd/system/xvfb.service
+  - path: /etc/systemd/system/xvfb@.service
     content: |
       [Unit]
-      Description=Servidor X virtual (tela do agente)
+      Description=Servidor X virtual - tela %i
       After=network.target
 
       [Service]
       User=agent
-      ExecStart=/usr/bin/Xvfb :1 -screen 0 1920x1080x24 -ac -nolisten tcp
+      ExecStart=/usr/bin/Xvfb :%i -screen 0 1920x1080x24 -ac -nolisten tcp
       Restart=always
       RestartSec=2
 
@@ -80,16 +80,16 @@ write_files:
       WantedBy=multi-user.target
 
   # --- Gerenciador de janelas -------------------------------------------
-  - path: /etc/systemd/system/openbox.service
+  - path: /etc/systemd/system/openbox@.service
     content: |
       [Unit]
-      Description=Gerenciador de janelas Openbox
-      After=xvfb.service
-      Requires=xvfb.service
+      Description=Gerenciador de janelas Openbox - tela %i
+      After=xvfb@%i.service
+      Requires=xvfb@%i.service
 
       [Service]
       User=agent
-      Environment=DISPLAY=:1
+      Environment=DISPLAY=:%i
       ExecStart=/usr/bin/openbox --sm-disable
       Restart=always
       RestartSec=2
@@ -100,17 +100,17 @@ write_files:
   # --- Servidor VNC ------------------------------------------------------
   # -localhost e a trava de seguranca: o VNC nao escuta na interface publica.
   # Quem chega precisa antes ter passado pelo SSH (mesma chave da conta DO).
-  - path: /etc/systemd/system/x11vnc.service
+  - path: /etc/systemd/system/x11vnc@.service
     content: |
       [Unit]
-      Description=Servidor VNC da tela do agente
-      After=openbox.service
-      Requires=xvfb.service
+      Description=Servidor VNC - tela %i
+      After=openbox@%i.service
+      Requires=xvfb@%i.service
 
       [Service]
       User=agent
-      Environment=DISPLAY=:1
-      ExecStart=/usr/bin/x11vnc -display :1 -localhost -nopw -forever -shared -rfbport 5900 -noxdamage
+      Environment=DISPLAY=:%i
+      ExecStart=/bin/bash -c '/usr/bin/x11vnc -display :%i -localhost -nopw -forever -shared -rfbport $((5900 + %i)) -noxdamage'
       Restart=always
       RestartSec=2
 
@@ -120,16 +120,16 @@ write_files:
   # --- Ponte VNC para o navegador ---------------------------------------
   # noVNC serve a tela como pagina web; tambem so em 127.0.0.1, alcancavel
   # apenas pelo tunel SSH aberto pelo operador.
-  - path: /etc/systemd/system/novnc.service
+  - path: /etc/systemd/system/novnc@.service
     content: |
       [Unit]
-      Description=noVNC (tela do agente no navegador)
-      After=x11vnc.service
-      Requires=x11vnc.service
+      Description=noVNC - tela %i
+      After=x11vnc@%i.service
+      Requires=x11vnc@%i.service
 
       [Service]
       User=agent
-      ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+      ExecStart=/bin/bash -c '/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:$((6080 + %i)) 127.0.0.1:$((5900 + %i))'
       Restart=always
       RestartSec=2
 
@@ -141,19 +141,19 @@ write_files:
   # cookies, logins e abas continuam apos reboot, rebuild ou restore.
   # A porta de depuracao 9222 fica em localhost para o agente dirigir o
   # navegador por CDP sem expor controle remoto na rede.
-  - path: /etc/systemd/system/chrome.service
+  - path: /etc/systemd/system/chrome@.service
     content: |
       [Unit]
-      Description=Google Chrome persistente do agente
-      After=openbox.service
-      Requires=xvfb.service
+      Description=Google Chrome persistente - tela %i
+      After=openbox@%i.service
+      Requires=xvfb@%i.service
 
       [Service]
       User=agent
-      Environment=DISPLAY=:1
+      Environment=DISPLAY=:%i
       ExecStart=/usr/bin/google-chrome-stable \
-        --user-data-dir=/workspace/.browser \
-        --remote-debugging-port=9222 \
+        --user-data-dir=/workspace/browser/screen-%i \
+        --remote-debugging-port=922%i \
         --remote-debugging-address=127.0.0.1 \
         --window-position=0,0 \
         --window-size=1920,1080 \
@@ -170,25 +170,70 @@ write_files:
       WantedBy=multi-user.target
 
   # --- Diagnostico de dentro da maquina ---------------------------------
+  - path: /usr/local/bin/screen-add
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Cria mais uma tela na MESMA maquina, no modelo da doc: um computador
+      # por conta, uma tela por agente. As telas sao superficies de trabalho
+      # separadas, NAO fronteiras de seguranca -- quem alcanca uma alcanca o
+      # mesmo /workspace e as mesmas credenciais de linha de comando.
+      # Uso: screen-add 2
+      set -euo pipefail
+      N="${1:?uso: screen-add <numero da tela, 2..9>}"
+      [[ "$N" =~ ^[2-9]$ ]] || { echo "tela deve ser de 2 a 9 (a 1 sobe no boot)"; exit 1; }
+      sudo systemctl enable --now "xvfb@$N" "openbox@$N" "x11vnc@$N" "novnc@$N" "chrome@$N"
+      sleep 3
+      echo "tela $N no ar:"
+      echo "  VNC  127.0.0.1:$((5900 + N))"
+      echo "  web  127.0.0.1:$((6080 + N))"
+      echo "  CDP  127.0.0.1:922$N"
+
+  - path: /usr/local/bin/screen-remove
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Derruba uma tela. O perfil do navegador dela CONTINUA em
+      # /workspace/browser/screen-N: derrubar a tela nao apaga a sessao,
+      # justamente para que ela volte igual em `screen-add`.
+      set -euo pipefail
+      N="${1:?uso: screen-remove <numero da tela, 2..9>}"
+      [[ "$N" =~ ^[2-9]$ ]] || { echo "a tela 1 nao se remove"; exit 1; }
+      sudo systemctl disable --now "chrome@$N" "novnc@$N" "x11vnc@$N" "openbox@$N" "xvfb@$N"
+      echo "tela $N removida (perfil preservado em /workspace/browser/screen-$N)"
+
   - path: /usr/local/bin/agent-status
     permissions: '0755'
     content: |
       #!/bin/bash
-      # Estado dos servicos da tela e do espaco em disco/memoria.
-      echo "=== servicos ==="
-      for unit in xvfb openbox x11vnc novnc chrome; do
-        printf "%-10s %s\n" "$unit" "$(systemctl is-active ${unit}.service)"
+      # Estado das telas ativas, do estado duravel e dos recursos.
+      echo "=== telas ==="
+      for n in $(seq 1 9); do
+        st="$(systemctl is-active xvfb@$n.service 2>/dev/null)"
+        [ "$st" != "active" ] && continue
+        printf "  tela %s: " "$n"
+        for unit in openbox x11vnc novnc chrome; do
+          printf "%s=%s " "$unit" "$(systemctl is-active ${unit}@$n.service)"
+        done
+        printf "| web 127.0.0.1:%s CDP 127.0.0.1:922%s\n" "$((6080 + n))" "$n"
       done
       echo
-      echo "=== portas locais ==="
-      ss -lntp 2>/dev/null | grep -E '5900|6080|9222' || echo "nenhuma porta da tela ouvindo"
+      echo "=== estado duravel ==="
+      printf "  volume: %s\n" "$(cat /var/lib/agent-computer-volume 2>/dev/null || echo DESCONHECIDO)"
+      if mountpoint -q /workspace; then
+        echo "  /workspace: volume separado (sobrevive a rebuild do droplet)"
+      else
+        echo "  /workspace: NO DISCO DO DROPLET -- some se o droplet for recriado"
+      fi
+      df -h /workspace 2>/dev/null | tail -1 | sed "s/^/  /"
+      echo "  /scratch: descartavel, $(du -sh /scratch 2>/dev/null | cut -f1)"
       echo
-      echo "=== memoria ==="
-      free -h
+      echo "=== portas ouvindo ==="
+      ss -lntp 2>/dev/null | grep -E ':(59[0-9][0-9]|60[0-9][0-9]|922[0-9])' || echo "  nenhuma"
       echo
-      echo "=== workspace ==="
-      du -sh /workspace 2>/dev/null
-      df -h / | tail -1
+      echo "=== recursos ==="
+      free -h | sed "s/^/  /"
+      df -h / | tail -1 | sed "s/^/  /"
 
 runcmd:
   # Swap: rede de seguranca contra OOM do Chrome, que e o processo mais
@@ -199,8 +244,26 @@ runcmd:
   # A chave SSH foi injetada em root pelo doctl; replicar para o usuario agent.
   - [ bash, -c, "install -d -m 700 -o agent -g agent /home/agent/.ssh && cp /root/.ssh/authorized_keys /home/agent/.ssh/authorized_keys && chown agent:agent /home/agent/.ssh/authorized_keys && chmod 600 /home/agent/.ssh/authorized_keys" ]
 
-  # Workspace compartilhado -- o diretorio que a doc do Grok chama de /workspace.
-  - [ bash, -c, "mkdir -p /workspace/.browser && chown -R agent:agent /workspace" ]
+  # ESTADO DURAVEL: volume de bloco separado, montado em /workspace.
+  #
+  # E o que torna "Update" possivel no sentido da doc: trocar a imagem do
+  # computador preservando o estado duravel. Com tudo no disco do droplet,
+  # destruir o droplet destruiria o trabalho junto, e so restaria "Reset".
+  #
+  # O device demora alguns segundos a aparecer depois do attach; sem a espera,
+  # o mount falha e o cloud-init segue adiante criando /workspace no disco
+  # local, que e o pior desfecho possivel: tudo funciona e o estado some no
+  # primeiro rebuild.
+  - [ bash, -c, "for i in $(seq 1 30); do [ -e /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace ] && break; sleep 2; done" ]
+  - [ bash, -c, "if [ -e /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace ]; then mkdir -p /workspace && (mount -o discard,defaults,noatime /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace || { mkfs.ext4 -F /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace && mount -o discard,defaults,noatime /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace; }) && echo '/dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace ext4 discard,defaults,noatime,nofail 0 2' >> /etc/fstab && echo VOLUME_MONTADO > /var/lib/agent-computer-volume; else echo SEM_VOLUME > /var/lib/agent-computer-volume; fi" ]
+  - [ bash, -c, "mkdir -p /workspace/browser /workspace/projects && chown -R agent:agent /workspace" ]
+
+  # DESCARTAVEL, explicitamente. A doc separa o que sobrevive do que nao:
+  # temporarios, pacote instalado na mao e estado de aplicacao nao commitado
+  # sao substituiveis. Sem um lugar declarado para o efemero, todo arquivo
+  # acaba no /workspace e a fronteira deixa de existir na pratica.
+  - [ bash, -c, "mkdir -p /scratch && chown agent:agent /scratch && chmod 1777 /scratch" ]
+  - [ bash, -c, "printf 'D /scratch 1777 agent agent -\n' > /etc/tmpfiles.d/scratch.conf" ]
 
   # Google Chrome do repositorio oficial (nao Chromium): melhor compatibilidade
   # com site real, que e o ponto de um agente que navega na web de verdade.
@@ -222,7 +285,9 @@ runcmd:
 
   # Subir a tela.
   - [ systemctl, daemon-reload ]
-  - [ bash, -c, "systemctl enable --now xvfb openbox x11vnc novnc chrome" ]
+  # Tela 1 sobe sempre. Telas adicionais entram sob demanda com
+  # `screen-add N`, seguindo o modelo da doc: uma maquina, N telas.
+  - [ bash, -c, "systemctl enable --now xvfb@1 openbox@1 x11vnc@1 novnc@1 chrome@1" ]
 
   # Marca de conclusao lida pelo script de espera -- sem isso nao ha como
   # distinguir "cloud-init ainda rodando" de "cloud-init falhou".

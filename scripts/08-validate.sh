@@ -31,16 +31,48 @@ else
 fi
 
 echo
-echo "=== 2. units systemd ==="
+echo "=== 2. units systemd da tela 1 ==="
 for unit in xvfb openbox x11vnc novnc chrome; do
-  st="$(agent_ssh "systemctl is-active ${unit}.service 2>/dev/null")"
-  [ "$st" = "active" ] && ok "$unit: $st" || fail "$unit: ${st:-sem resposta}"
+  st="$(agent_ssh "systemctl is-active ${unit}@1.service 2>/dev/null")"
+  [ "$st" = "active" ] && ok "${unit}@1: $st" || fail "${unit}@1: ${st:-sem resposta}"
 done
+
+echo
+echo "=== 2b. estado durável em volume separado ==="
+# A checagem que mais importa. Sem ela, tudo funciona e o trabalho some no
+# primeiro update — e o sintoma não existe até ser tarde demais.
+if agent_ssh 'mountpoint -q /workspace'; then
+  ok "/workspace é ponto de montagem (volume separado)"
+  dev="$(agent_ssh 'findmnt -no SOURCE /workspace 2>/dev/null')"
+  case "$dev" in
+    /dev/sd*|/dev/disk/by-id/scsi-0DO_Volume*) ok "montado de $dev" ;;
+    *) fail "montado de origem inesperada: $dev" ;;
+  esac
+else
+  fail "/workspace está no DISCO DO DROPLET — some num update"
+fi
+if [ "$(agent_ssh 'cat /var/lib/agent-computer-volume 2>/dev/null')" = "VOLUME_MONTADO" ]; then
+  ok "cloud-init confirmou a montagem"
+else
+  fail "cloud-init não montou o volume"
+fi
+# nofail no fstab: sem ele, um boot sem o volume cai em emergency shell e não
+# há nem SSH para diagnosticar.
+if agent_ssh 'grep -q "/workspace.*nofail" /etc/fstab'; then
+  ok "fstab tem nofail (boot não trava se o volume faltar)"
+else
+  fail "fstab sem nofail — boot sem volume cai em emergency shell"
+fi
+
+echo
+echo "=== 2c. fronteira durável x descartável ==="
+agent_ssh 'test -d /scratch' && ok "/scratch existe (efêmero declarado)" || fail "/scratch ausente"
+agent_ssh 'test -d /workspace/browser' && ok "/workspace/browser (perfis)" || fail "/workspace/browser ausente"
 
 echo
 echo "=== 3. portas ouvindo (todas devem ser 127.0.0.1) ==="
 ports="$(agent_ssh 'ss -lnt 2>/dev/null')"
-for p in 5900 6080 9222; do
+for p in 5901 6081 9221; do
   line="$(echo "$ports" | grep ":$p " | head -1)"
   if [ -z "$line" ]; then
     fail "porta $p nao esta ouvindo"
@@ -55,7 +87,7 @@ echo
 echo "=== 4. firewall ==="
 ufw="$(agent_ssh 'sudo ufw status 2>/dev/null')"
 echo "$ufw" | grep -q "Status: active" && ok "ufw ativo" || fail "ufw inativo"
-for p in 5900 6080 9222; do
+for p in 5901 6081 9221; do
   echo "$ufw" | grep -q "^$p" && fail "ufw permite $p de fora" || ok "ufw nao expoe $p"
 done
 
@@ -67,17 +99,17 @@ if echo "$res" | grep -q "1920x1080"; then ok "X em 1920x1080"; else fail "X nao
 echo
 echo "=== 6. Chrome vivo e com o perfil certo ==="
 if agent_ssh 'pgrep -f google-chrome-stable >/dev/null' ; then ok "processo Chrome no ar"; else fail "Chrome nao esta rodando"; fi
-ver="$(agent_ssh 'curl -s --max-time 5 http://127.0.0.1:9222/json/version 2>/dev/null')"
+ver="$(agent_ssh 'curl -s --max-time 5 http://127.0.0.1:9221/json/version 2>/dev/null')"
 if echo "$ver" | grep -q "Chrome/"; then
   ok "CDP responde: $(echo "$ver" | sed -n 's/.*"Browser": *"\([^"]*\)".*/\1/p')"
 else
-  fail "CDP em 9222 nao responde"
+  fail "CDP em 9221 nao responde"
 fi
-if agent_ssh 'test -d /workspace/.browser/Default'; then ok "perfil persistente em /workspace/.browser"; else fail "perfil do Chrome nao esta em /workspace"; fi
+if agent_ssh 'test -d /workspace/browser/screen-1/Default'; then ok "perfil da tela 1 em /workspace/browser/screen-1"; else fail "perfil do Chrome nao esta em /workspace"; fi
 
 echo
 echo "=== 7. noVNC serve a pagina ==="
-code="$(agent_ssh 'curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:6080/vnc.html 2>/dev/null')"
+code="$(agent_ssh 'curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:6081/vnc.html 2>/dev/null')"
 [ "$code" = "200" ] && ok "noVNC responde HTTP 200" || fail "noVNC devolveu HTTP ${code:-sem resposta}"
 
 echo

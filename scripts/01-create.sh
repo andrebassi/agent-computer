@@ -47,15 +47,30 @@ PYCHECK
 
 echo "criando '$DROPLET_NAME': $DROPLET_SIZE em $DROPLET_REGION ($DROPLET_IMAGE)"
 
+# O volume duravel e anexado JA NA CRIACAO: se fosse anexado depois, o
+# cloud-init rodaria antes de o device existir e criaria /workspace no disco
+# do droplet -- tudo funcionaria, e o estado sumiria no primeiro update.
+vol_id="$(timeout 30s doctl compute volume list --format ID,Name --no-header 2>/dev/null \
+  | awk -v n="$VOLUME_NAME" '$2==n{print $1}')"
+if [ -z "$vol_id" ]; then
+  echo "  volume duravel '$VOLUME_NAME' nao existe; criando"
+  vol_id="$(timeout 120s doctl compute volume create "$VOLUME_NAME" \
+    --region "$DROPLET_REGION" --size "${VOLUME_SIZE_GB}GiB" --fs-type ext4 \
+    --format ID --no-header)"
+fi
+echo "  volume duravel: $vol_id"
+
 body="$(jq -n \
   --arg name "$DROPLET_NAME" \
   --arg region "$DROPLET_REGION" \
   --arg size "$DROPLET_SIZE" \
   --arg image "$DROPLET_IMAGE" \
   --argjson key "$SSH_KEY_ID" \
+  --arg vol "$vol_id" \
   --rawfile ud "$USER_DATA" \
   '{name:$name, region:$region, size:$size, image:$image,
     ssh_keys:[$key], user_data:$ud, monitoring:true,
+    volumes:[$vol],
     tags:["agent-computer","lab"]}')"
 
 resp="$(curl -sS -X POST "https://api.digitalocean.com/v2/droplets" \

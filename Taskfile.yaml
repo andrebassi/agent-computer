@@ -60,8 +60,27 @@ tasks:
     cmds:
       - ./scripts/09-persistence-test.sh 2>&1 | tee logs/persistence.log
 
+  update:
+    desc: 'Verbo UPDATE da doc: recria o computador com imagem nova, preservando /workspace'
+    cmds:
+      - ./scripts/10-update.sh 2>&1 | tee logs/update.log
+
+  reset:
+    desc: 'Verbo RESET da doc: volta ao snapshot durável e DESCARTA trabalho recente'
+    cmds:
+      - ./scripts/11-reset.sh {{.CLI_ARGS}} 2>&1 | tee logs/reset.log
+
+  screens:
+    desc: 'Lista as telas ativas. Para criar: task ssh, depois screen-add N'
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'agent-status'
+
   snapshot:
-    desc: Snapshot do droplet (o "Update/Reset" da doc do Grok)
+    desc: Snapshot do volume durável (base do RESET)
     cmds:
       - ./scripts/04-snapshot.sh 2>&1 | tee logs/snapshot.log
 

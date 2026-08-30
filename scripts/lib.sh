@@ -13,9 +13,15 @@ DROPLET_IMAGE="${DROPLET_IMAGE:-ubuntu-24-04-x64}"
 SSH_KEY_ID="${SSH_KEY_ID:-55207659}"            # andrebassi-bb, única chave da conta
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/andrebassi-bb}"
 
+# Estado duravel: volume de bloco separado do disco do droplet. E o que permite
+# o "Update" da doc -- trocar a imagem do computador sem perder o trabalho.
+# US$ 0,10/GB/mes.
+VOLUME_NAME="${VOLUME_NAME:-agent-computer-workspace}"
+VOLUME_SIZE_GB="${VOLUME_SIZE_GB:-20}"
+
 # Portas do túnel local. A tela nunca é publicada — só chega por SSH.
-LOCAL_VNC_PORT="${LOCAL_VNC_PORT:-6080}"
-LOCAL_CDP_PORT="${LOCAL_CDP_PORT:-9222}"
+LOCAL_VNC_PORT="${LOCAL_VNC_PORT:-6081}"   # 6080 + numero da tela
+LOCAL_CDP_PORT="${LOCAL_CDP_PORT:-9221}"   # 9220 + numero da tela
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
