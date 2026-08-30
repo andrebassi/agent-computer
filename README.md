@@ -2010,6 +2010,11 @@ agentd -resume -task <id> -note "resolvi o login"
 agentd -abandon -task <id>
 
 ## a porta HTTP (outros sistemas chamam por aqui)
+task serve-setup    # instala token da API e chave do modelo, do pass
+task serve-enable   # sobe o serviço e o timer, e os deixa no boot
+task serve-status   # estado do serviço e do timer
+task serve-logs     # journal da porta
+
 agentd -serve                        # 127.0.0.1:8787, token em <state>/api-token
 agentd -serve -listen 100.x.y.z:8787 # na malha; NUNCA 0.0.0.0
 
@@ -2821,6 +2826,91 @@ agentd -notify-drain -webhook <url>    # entrega e limpa a fila
 ```
 
 ---
+
+
+## 11. Operação: como a porta sobe de verdade
+
+Três peças, nesta ordem — e nenhuma delas é opcional.
+
+### 11.1 As credenciais, do cofre para a máquina
+
+```bash
+task serve-setup
+```
+
+Instala duas coisas, e **as duas em arquivo `0600`, nunca em `Environment=`**:
+
+| Arquivo | O quê | Por que arquivo |
+|---|---|---|
+| `/workspace/agent/xai.env` | chave do modelo | `systemctl cat` e `/proc/<pid>/environ` expõem o ambiente de um processo; e rotacionar passaria a exigir editar a unidade |
+| `/workspace/agent/api-token` | token da porta | idem, mais o fato de a porta **falhar fechada** sem ele |
+
+O token é **gerado**, nunca digitado: `openssl rand -hex 32`. Token digitado à mão
+é adivinhável. Ele nasce no `openssl`, vai para o `pass` e para o droplet por
+stdin, e o arquivo temporário morre em `shred` — nunca é impresso.
+
+⚠️ A chave do modelo mudou de lugar por necessidade: até aqui ela viajava na
+**linha do SSH a cada invocação**, o que funciona para um comando pontual e não
+funciona para um serviço — o systemd sobe o processo sem ninguém para passá-la.
+
+### 11.2 As unidades vivem no `cloud-init`, não no droplet
+
+```
+/etc/systemd/system/agentd-api.service      a porta HTTP
+/etc/systemd/system/agentd-notify.service   a entrega dos avisos
+/etc/systemd/system/agentd-notify.timer     a cada minuto
+```
+
+**Isto não é preferência de organização.** `task update` destrói a máquina e
+remonta só o volume: uma unidade escrita à mão no droplet **some no primeiro
+update**, o serviço não volta, e ninguém entende por quê.
+
+Detalhes que importam em cada uma:
+
+| Diretiva | Motivo |
+|---|---|
+| `RequiresMountsFor=/workspace` | sem isto o systemd sobe o serviço antes da montagem, e ele falha lendo um diretório vazio |
+| `TimeoutStopSec=40` | o encerramento limpo cancela as tarefas em voo, elas gravam o estado e soltam a trava — 40 s dá folga antes do SIGKILL |
+| `Restart=on-failure` | e não `always`: um serviço que sai limpo saiu por decisão |
+| `EnvironmentFile=-/workspace/agent/notify.env` | o `-` torna opcional; sem destino, o drenador só lista |
+| `AccuracySec=10s` no timer | sem isto, um drenador lento acumularia execuções sobrepostas disputando a mesma fila |
+
+**Nenhuma é habilitada por padrão.** A porta exige as duas credenciais
+instaladas antes; subir sem elas produziria um serviço em falha reiniciando para
+sempre. Quem habilita é `task serve-enable`.
+
+### 11.3 O deploy reinicia o serviço
+
+`16-deploy-agent.sh` ganhou um passo: depois de instalar o binário, ele
+**reinicia a porta se ela estiver no ar**.
+
+Sem isso, o binário novo fica no disco e o serviço continua rodando o velho — o
+deploy reporta sucesso e nada muda no comportamento. É o modo de falha mais
+confuso possível: o código está certo, o teste passa, e a máquina insiste no bug
+que você acabou de corrigir.
+
+### 11.4 O que ainda não foi exercitado na máquina real
+
+Honestidade sobre o alcance do que está testado:
+
+| | Estado |
+|---|---|
+| a porta, os handlers, o supervisor, o token | ✅ testados, com `-race` |
+| `-serve` subindo e recusando sem token | ✅ provado pelo binário, localmente |
+| as unidades systemd | ⚠️ **nunca rodaram** — o droplet foi destruído ao fim da sessão |
+| reconciliação depois de `kill -9` | ⚠️ tem teste em processo, falta na máquina |
+| aviso entregue com a sessão SSH morta | ⚠️ idem |
+
+As duas últimas são justamente o que teste em processo **não alcança**: "o flock
+morre com o processo" é garantia do sistema operacional, e um teste em processo
+não consegue exercitá-la porque o descritor é dele.
+
+Ao subir o droplet de novo, a sequência é:
+
+```bash
+task up && task deploy && task serve-setup && task serve-enable
+task serve-status        # confirma pelo efeito
+```
 
 ## 9. Números medidos, 30/08/2026
 

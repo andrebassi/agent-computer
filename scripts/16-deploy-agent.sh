@@ -64,7 +64,24 @@ timeout 180s scp -i "$SSH_KEY_FILE" \
 agent_ssh 'chmod +x /workspace/.agentd-novo && mv /workspace/.agentd-novo /workspace/agentd'
 
 echo
-echo "5/5 conferindo pelo EFEITO, nao pelo codigo de saida"
+echo "5/6 reiniciando a porta HTTP, se ela estiver no ar"
+# Sem isto, o binario novo fica no disco e o SERVICO CONTINUA RODANDO O VELHO —
+# o deploy reporta sucesso e nada muda no comportamento, que e o modo de falha
+# mais confuso possivel: o codigo esta certo, o teste passa, e a maquina insiste
+# no bug que voce acabou de corrigir.
+#
+# O restart e limpo: o encerramento cancela as tarefas em voo, elas gravam o
+# estado e soltam a trava.
+if agent_ssh "systemctl is-active --quiet agentd-api" 2>/dev/null; then
+  agent_ssh "sudo systemctl restart agentd-api && sleep 2 && systemctl is-active agentd-api" \
+    | sed 's/^/  /'
+  agent_ssh "timeout 10s curl -sS --max-time 5 http://127.0.0.1:8787/health" | sed 's/^/  health: /'
+else
+  echo "  a porta nao esta no ar (nada a reiniciar)"
+fi
+
+echo
+echo "6/6 conferindo pelo EFEITO, nao pelo codigo de saida"
 # `-catalog list` roda sem chave de API e sem tocar em tela nenhuma: e a prova
 # mais barata de que o binario executa naquela maquina.
 agent_ssh '/workspace/agentd -catalog list 2>&1 | head -20' | sed 's/^/  /'

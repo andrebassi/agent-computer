@@ -88,6 +88,46 @@ tasks:
       - mkdir -p logs
       - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
 
+  serve-setup:
+    desc: 'Instala as credenciais da porta HTTP: token da API e chave do modelo'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/24-setup-xai-env.sh 2>&1 | tee logs/xai-env.log
+      - ./scripts/23-setup-api-token.sh 2>&1 | tee logs/api-token.log
+
+  serve-enable:
+    desc: Sobe a porta HTTP e o timer de avisos, e os deixa ligados no boot
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'sudo systemctl daemon-reload &&
+          sudo systemctl enable --now agentd-api.service agentd-notify.timer &&
+          sleep 2 &&
+          systemctl is-active agentd-api.service &&
+          timeout 10s curl -sS --max-time 5 http://127.0.0.1:8787/health' 2>&1 | tee logs/serve-enable.log
+
+  serve-status:
+    desc: Estado da porta HTTP e do timer de avisos
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'systemctl is-active agentd-api.service agentd-notify.timer;
+          echo; systemctl status agentd-api.service --no-pager -n 8;
+          echo; timeout 10s curl -sS --max-time 5 http://127.0.0.1:8787/health || echo "(porta nao responde)"'
+
+  serve-logs:
+    desc: Log da porta HTTP
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        agent_ssh 'journalctl -u agentd-api.service -n 60 --no-pager'
+
   deploy:
     desc: Compila o agentd e o instala em /workspace — o gate de cobertura roda antes
     cmds:

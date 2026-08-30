@@ -169,6 +169,83 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  # --- Porta HTTP: outros sistemas mandam tarefa por aqui ----------------
+  #
+  # A unidade mora AQUI, no cloud-init, e nao escrita a mao no droplet: `task
+  # update` destroi a maquina e remonta so o volume, entao uma unidade manual
+  # some no primeiro update: o servico nao volta e ninguem entende por que.
+  #
+  # Ela nao e habilitada por padrao. A porta so sobe quando alguem rodar
+  # `task serve-enable`, porque ela exige duas credenciais instaladas antes
+  # (token da API e chave do modelo) e subir sem elas so produziria um servico
+  # em falha reiniciando para sempre.
+  - path: /etc/systemd/system/agentd-api.service
+    content: |
+      [Unit]
+      Description=agent computer - porta HTTP de tarefas
+      # O binario e o estado vivem no volume duravel. Sem isto, o systemd sobe
+      # o servico antes da montagem e ele falha lendo um diretorio vazio.
+      RequiresMountsFor=/workspace
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      User=agent
+      # Chave do modelo em ARQUIVO, nao em Environment=: `systemctl cat` e
+      # /proc/<pid>/environ expoem o ambiente, e rotacionar passaria a exigir
+      # editar a unidade.
+      EnvironmentFile=/workspace/agent/xai.env
+      # 127.0.0.1 de proposito: o acesso e pelo mesmo tunel SSH que ja serve a
+      # tela. Escutar em 0.0.0.0 esta a uma regra de firewall mal escrita de
+      # estar na internet publica, e o modo de falha e silencioso.
+      ExecStart=/workspace/agentd -serve -listen 127.0.0.1:8787
+      Restart=on-failure
+      RestartSec=10
+      # O encerramento limpo cancela as tarefas em voo, elas gravam o estado e
+      # soltam a trava. 40s da folga para isso acontecer antes do SIGKILL.
+      TimeoutStopSec=40
+      KillSignal=SIGTERM
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # --- Entrega dos avisos, em processo separado --------------------------
+  #
+  # E o que satisfaz o requisito duro da proatividade: a entrega nao depende da
+  # conexao que iniciou a tarefa. Matar a sessao SSH nao mata o aviso.
+  #
+  # Tambem nao e habilitado por padrao: sem destino configurado nao ha o que
+  # entregar, e um timer disparando a cada minuto contra nada e ruido no log.
+  - path: /etc/systemd/system/agentd-notify.service
+    content: |
+      [Unit]
+      Description=agent computer - entrega os avisos enfileirados
+      RequiresMountsFor=/workspace
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      User=agent
+      # O destino vem de um arquivo separado, para trocar o webhook sem editar
+      # a unidade. Se ele nao existir, o drenador so lista e nao consome a fila.
+      EnvironmentFile=-/workspace/agent/notify.env
+      ExecStart=/bin/sh -c '/workspace/agentd -notify-drain ${AGENT_WEBHOOK:+-webhook "$AGENT_WEBHOOK"}'
+
+  - path: /etc/systemd/system/agentd-notify.timer
+    content: |
+      [Unit]
+      Description=agent computer - drena os avisos a cada minuto
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=1min
+      # Sem isto, um drenador que demore mais que o intervalo acumularia
+      # execucoes sobrepostas disputando a mesma fila.
+      AccuracySec=10s
+
+      [Install]
+      WantedBy=timers.target
+
   # --- Diagnostico de dentro da maquina ---------------------------------
   - path: /usr/local/bin/screen-add
     permissions: '0755'
