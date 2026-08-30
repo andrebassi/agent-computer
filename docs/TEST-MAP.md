@@ -209,7 +209,7 @@ a unidade. Quem cria e ajusta esses diretórios é o oneshot
 |---|---|
 | `request_secret` (pedido de senha na tela) | precisa de terminal interativo; há teste em processo, não na máquina |
 | `browser_fill` e `browser_click` isolados | exercitados de through pela delegação, não por teste próprio |
-| retenção de conversa | não existe expurgo; a saída de ferramenta fica no volume para sempre (ver `SECURITY.md`) |
+| retenção de conversa | sem expurgo — **decisão aceita**, não pendência (o porquê está em `SECURITY.md`) |
 
 
 ## Histórico: o que cada camada achou

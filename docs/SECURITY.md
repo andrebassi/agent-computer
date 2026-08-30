@@ -210,9 +210,26 @@ Registrado, não escondido.
 
 | | Estado |
 |---|---|
-| **Conversa não expira** | a saída de toda ferramenta fica no volume para sempre, e entra em cada foto. Se o modelo leu um segredo em algum momento, ele está gravado ali. Sem expurgo nem redação |
 | **`NoNewPrivileges` desligado no `agentd-api`** | e **de propósito**: o rebaixamento usa `sudo`, que é setuid. Ligar quebraria justamente o mecanismo que tira o cofre do alcance do modelo |
 | **Root na máquina lê tudo** | cofre é cifra em repouso mais separação de usuário, não isolamento contra root. Quem tem a chave SSH de root do Mac contorna tudo — e é assim que o deploy funciona |
+
+### Conversa não expira, e é decisão aceita
+
+A saída de toda ferramenta fica no volume para sempre, e entra em cada foto. Se
+o modelo leu um segredo em algum momento, ele está gravado ali — sem expurgo
+nem redação.
+
+**Decisão do dono (30/08/2026): fica assim.** Não é pendência esquecida; é risco
+conhecido e aceito. O que o torna aceitável neste desenho:
+
+- o volume é do `agentd`, e o usuário do modelo não lê o diretório de conversas;
+- quem alcança o volume já alcança o cofre cifrado e a chave SSH de root — a
+  conversa não é o elo mais fraco;
+- a máquina é de uso pessoal e descartável, não multi-inquilino.
+
+Se um dia ela hospedar conta de terceiro, isto volta a ser pendência — e a
+correção é expurgo por idade no `conversations/`, não redação, porque redação
+confiável exigiria saber o que é segredo dentro de texto livre.
 
 ### Por que não trocar `sudo` por capacidade
 
