@@ -22,6 +22,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
@@ -72,6 +73,7 @@ func main() {
 		listenAddr   = flag.String("listen", "127.0.0.1:8787", "endereço de escuta; use o IP da malha, NUNCA 0.0.0.0")
 		tokenFile    = flag.String("token-file", "", "arquivo do token da API (padrão: <state>/api-token)")
 		taskTimeout  = flag.Duration("task-timeout", 2*time.Hour, "teto de tempo de uma tarefa")
+		vaultInit    = flag.Bool("vault-init", false, "cria o cofre e grava segredos lidos como chave=valor na entrada padrão")
 	)
 	flag.Parse()
 
@@ -80,7 +82,7 @@ func main() {
 		stateDir: *stateDir, model: *modelName, webhook: *webhookURL,
 		listen: *listenAddr, tokenFile: *tokenFile, taskTimeout: *taskTimeout,
 		resume: *resume, abandon: *abandon, catalog: *catalog, drain: *notifyDrain,
-		serve: *serveHTTP, rest: flag.Args(),
+		serve: *serveHTTP, vaultInit: *vaultInit, rest: flag.Args(),
 	}
 	if err := run(opts); err != nil {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
@@ -100,7 +102,7 @@ type runOptions struct {
 	listen, tokenFile               string
 	taskTimeout                     time.Duration
 	resume, abandon, catalog, drain bool
-	serve                           bool
+	serve, vaultInit                bool
 	rest                            []string
 }
 
@@ -109,6 +111,13 @@ func run(o runOptions) error {
 	screenNumber, prompt, taskID := o.screen, o.prompt, o.taskID
 	note, stateDir, modelName := o.note, o.stateDir, o.model
 	resume, abandon, catalog, rest := o.resume, o.abandon, o.catalog, o.rest
+
+	// Provisionar o cofre vem ANTES de qualquer coisa que leia segredo: é o
+	// passo que faz os outros funcionarem, e exigir chave de modelo aqui seria
+	// pedir a credencial que ainda não há onde guardar.
+	if o.vaultInit {
+		return runVaultInit(context.Background(), stateDir, os.Stdin)
+	}
 
 	// Gerenciar catálogo é operação local, como abandonar: nada de modelo nem
 	// de chave da API.
@@ -120,7 +129,15 @@ func run(o runOptions) error {
 	// timer. É o que satisfaz o requisito de a entrega não depender da conexão
 	// que iniciou a tarefa — e por isso não pede chave de modelo nenhuma.
 	if o.drain {
-		return runDrain(context.Background(), stateDir, o.webhook)
+		// O destino também pode vir do ambiente, e a unidade systemd usa esse
+		// caminho. Antes ela montava a linha de comando com `sh -c`, e o valor
+		// era interpolado entre aspas dentro de um shell — um valor que fechasse
+		// a aspa emendaria outro comando. Lendo aqui, não existe shell no meio.
+		webhook := o.webhook
+		if webhook == "" {
+			webhook = strings.TrimSpace(os.Getenv("AGENT_WEBHOOK"))
+		}
+		return runDrain(context.Background(), stateDir, webhook)
 	}
 
 	// A porta HTTP precisa do modelo, porque as tarefas que ela cria o chamam.
@@ -151,12 +168,18 @@ func run(o runOptions) error {
 		return abandonTask(context.Background(), taskStore, screenDriver, taskID)
 	}
 
-	// A chave vem só do ambiente, e quem a coloca lá é o wrapper que a lê do
-	// cofre. Assim ela nunca aparece em linha de comando, onde `ps` a exporia a
-	// qualquer processo da máquina.
-	apiKey := os.Getenv("XAI_API_KEY")
-	if apiKey == "" {
-		return errors.New("XAI_API_KEY não está no ambiente")
+	// A chave vem do cofre cifrado e, na falta dele, do ambiente. Nunca de
+	// argumento: `ps` mostra a linha de comando de qualquer processo a qualquer
+	// usuário da máquina.
+	apiKey, source, err := resolveModelKey(context.Background(), stateDir)
+	if err != nil {
+		return err
+	}
+	if source != vault.SourceVault {
+		// A origem é dita em voz alta porque uma máquina que caiu para o
+		// ambiente parece idêntica a uma que usa o cofre — e a diferença é
+		// exatamente a que uma auditoria procura.
+		fmt.Fprintf(os.Stderr, "aviso: chave do modelo veio do %s, não do cofre\n", source)
 	}
 
 	options := []xai.Option{}
@@ -183,7 +206,7 @@ func run(o runOptions) error {
 
 	// Ferramentas sempre disponíveis, independentes de conector.
 	toolset := []ports.Tool{
-		tools.NewShell("/workspace"),
+		tools.NewShellSandboxed("/workspace", toolSandbox()),
 		tools.NewTakeover(),
 	}
 
@@ -207,6 +230,8 @@ func run(o runOptions) error {
 	if err != nil {
 		return err
 	}
+	// Mesma regra do caminho do serviço: conector lê credencial do cofre.
+	registry = registry.WithSecrets(openVault(context.Background(), stateDir))
 	request := domain.ParseTaskRequest(prompt)
 	if len(request.Connectors) > 0 {
 		attached, missing := registry.ToolsFor(request.Connectors)

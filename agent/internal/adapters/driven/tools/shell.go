@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -26,6 +25,12 @@ type Shell struct {
 	// workdir é o diretório inicial. Aponta para o workspace durável, e não
 	// para o efêmero, porque é onde o trabalho deve sobreviver a um rebuild.
 	workdir string
+	// sandbox rebaixa o comando para um usuário sem acesso ao cofre.
+	//
+	// É a peça que faz a cifra em repouso valer alguma coisa contra quem já está
+	// dentro da máquina: sem ela, o `bash -c` do modelo roda com o usuário do
+	// agentd, e um `cat` no arquivo de senha entrega todos os segredos.
+	sandbox *Sandbox
 }
 
 // shellArgs é o formato que o modelo preenche.
@@ -35,7 +40,21 @@ type shellArgs struct {
 }
 
 // NewShell cria a ferramenta com o diretório de trabalho padrão.
-func NewShell(workdir string) *Shell { return &Shell{workdir: workdir} }
+//
+// Sem rebaixamento: é o construtor da máquina de desenvolvimento e dos testes,
+// onde não existem dois usuários.
+func NewShell(workdir string) *Shell {
+	return &Shell{workdir: workdir, sandbox: NewSandbox("")}
+}
+
+// NewShellSandboxed cria a ferramenta com o comando rebaixado para outro usuário.
+//
+// É o construtor de produção. O usuário informado NÃO pode ser o mesmo que roda
+// o agentd — se for, o rebaixamento é nominal e o cofre segue alcançável pelo
+// shell do modelo.
+func NewShellSandboxed(workdir string, sandbox *Sandbox) *Shell {
+	return &Shell{workdir: workdir, sandbox: sandbox}
+}
 
 // Spec descreve a ferramenta para o modelo.
 func (s *Shell) Spec() ports.ToolSpec {
@@ -78,7 +97,7 @@ func (s *Shell) Execute(ctx context.Context, _ int, arguments string) (*ports.To
 	// histórico enviado ao modelo, gastando token e confundindo o agente.
 	// Medido nesta máquina: um `.bash_profile` com caminho quebrado fazia
 	// `true` devolver uma mensagem de erro em vez de saída vazia.
-	cmd := exec.CommandContext(runCtx, "bash", "-c", args.Command)
+	cmd := s.sandbox.Command(runCtx, "bash", "-c", args.Command)
 	cmd.Dir = s.workdir
 	if args.Workdir != "" {
 		cmd.Dir = args.Workdir

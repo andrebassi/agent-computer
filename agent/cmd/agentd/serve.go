@@ -35,13 +35,15 @@ const (
 // não alcança precisa ficar fora do que ele mede.
 func serve(ctx context.Context, d *deps, listenAddr, tokenFile string, taskTimeout time.Duration) error {
 	// Falha FECHADA: sem token válido, a porta não sobe. Uma porta que abre
-	// porque o arquivo sumiu é o pior desfecho possível.
-	token, err := api.ReadToken(tokenFile)
+	// porque o segredo sumiu é o pior desfecho possível — tudo funciona,
+	// ninguém percebe, e a máquina fica aberta com shell e navegador dentro.
+	token, tokenSource, err := readServeToken(ctx, d.stateDir, tokenFile)
 	if err != nil {
 		return err
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger.Info("token da porta HTTP carregado", "origem", tokenSource)
 	life := service.NewLifecycle(d.store, d.screen, time.Now)
 
 	// RECONCILIAÇÃO ANTES DO LISTENER.

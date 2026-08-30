@@ -167,3 +167,22 @@ type EventSink interface {
 type SecretPrompter interface {
 	Prompt(ctx context.Context, screen int, req *domain.SecretRequest) (string, error)
 }
+
+// SecretStore lê credenciais de um cofre cifrado em repouso.
+//
+// Existe para tirar segredo de arquivo em claro no volume durável. O volume é
+// fotografado por `task snapshot`, e a foto vai para a conta do DigitalOcean —
+// hoje ela carregaria a chave da xAI legível por quem tiver o token da conta.
+// Com o cofre, a foto carrega só texto cifrado.
+//
+// O que este porto NÃO resolve, e não se deve fingir que resolve: processo
+// comprometido rodando como o mesmo usuário lê o cofre igual. O ganho é cifra
+// em repouso no volume, não isolamento entre processos.
+type SecretStore interface {
+	// Get devolve o valor da chave, ou ErrSecretNotFound se ela não existir.
+	//
+	// Devolve string, e não []byte, porque todo consumidor daqui é cabeçalho
+	// HTTP ou comparação de token — converter em cada ponto de uso só espalharia
+	// a cópia do segredo por mais lugares na memória.
+	Get(ctx context.Context, key string) (string, error)
+}

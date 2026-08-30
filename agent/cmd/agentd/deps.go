@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -78,6 +79,9 @@ func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, err
 	if d.registry, err = connectors.NewRegistry(stateDir + "/connectors"); err != nil {
 		return nil, err
 	}
+	// A credencial de conector também sai do cofre. Ela nunca deixa este
+	// processo: o agentd monta a requisição HTTP ele mesmo.
+	d.registry = d.registry.WithSecrets(openVault(context.Background(), stateDir))
 	if d.skills, err = skills.NewStore(stateDir + "/skills"); err != nil {
 		return nil, err
 	}
@@ -103,7 +107,7 @@ func (d *deps) agentFactory() api.AgentFactory {
 	return func(prompt string) (ports.TaskRunner, string, error) {
 		// Ferramentas sempre disponíveis, independentes de conector.
 		toolset := []ports.Tool{
-			tools.NewShell("/workspace"),
+			tools.NewShellSandboxed("/workspace", toolSandbox()),
 			tools.NewTakeover(),
 		}
 		// Ferramentas de navegador: é o que permite ao agente PILOTAR o Chrome

@@ -52,15 +52,84 @@ packages:
   - gnupg
 
 users:
+  # agentd e o DONO DO COFRE e quem roda o servico. Sem shell e sem sudo: ele
+  # nao precisa de nenhum privilegio proprio, so de ser um usuario diferente.
+  #
+  # A separacao e o mecanismo inteiro da protecao dos segredos. O modelo dirige
+  # a ferramenta de shell; se ela rodasse com o usuario dono da identidade age,
+  # um `cat` no arquivo de senha entregaria tudo, e a cifra em repouso so
+  # protegeria a foto do volume -- nao a maquina.
+  - name: agentd
+    system: true
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+  # agent e a conta SSH e o usuario para quem as ferramentas do modelo caem.
+  #
+  # PERDEU o NOPASSWD:ALL de proposito. Com ele, o modelo era root: lia o cofre,
+  # o token da porta, a credencial do agente de codigo, e desfazia qualquer
+  # controle deste arquivo com uma linha. O sudo agora e lista fechada, em
+  # /etc/sudoers.d/agent-computer, com os comandos que a operacao usa de fato.
   - name: agent
-    groups: [sudo]
     shell: /bin/bash
-    sudo: ['ALL=(ALL) NOPASSWD:ALL']
     # Sem ssh_authorized_keys aqui de proposito: lista vazia reprova no schema
     # do cloud-init ("[] is too short"). A chave e copiada de /root/.ssh pelo
     # runcmd, ja que o DigitalOcean a injeta em root no momento da criacao.
 
 write_files:
+  # --- Privilegio: lista fechada -----------------------------------------
+  #
+  # Substitui o `NOPASSWD:ALL` que o usuario agent tinha. Com ele, a ferramenta
+  # de shell -- que o MODELO dirige -- era root: lia /etc/agentd/vault.pass,
+  # lia o token da porta HTTP, e reescrevia qualquer unidade deste arquivo.
+  # Nenhum controle de segredo sobrevive a isso.
+  #
+  # Duas concessoes, e so estas duas:
+  #
+  #   agentd -> agent   rebaixamento das ferramentas (reducao de privilegio)
+  #   agent  -> root    lista fechada de comandos de operacao
+  #
+  # Fora da lista de proposito, porque cada um destes E root por outro caminho:
+  #   apt-get     script de mantenedor roda como root
+  #   chown/chmod muda o dono do proprio arquivo de senha do cofre
+  #   systemctl edit/link/set-property   injeta ExecStart arbitrario
+  #   journalctl sem unidade fixa        le log de qualquer servico
+  #   dd, tee, cp, cat, bash, su, sh     leitura ou escrita arbitraria
+  - path: /etc/sudoers.d/agent-computer
+    permissions: '0440'
+    owner: root:root
+    content: |
+      # Rebaixamento: o servico abre mao de privilegio para rodar o que o modelo
+      # pede. A direcao e sempre de reducao -- agentd tem o cofre, agent nao.
+      agentd ALL=(agent) NOPASSWD: ALL
+      # A credencial do agente de codigo atravessa o sudo porque e feita para
+      # ser usada por ele. A chave do modelo e o token da porta NAO estao aqui:
+      # esses nunca saem do binario.
+      Defaults:agentd env_keep += "CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CONFIG_DIR"
+      Defaults:agentd !requiretty
+
+      # Operacao pela conta SSH. Verbos explicitos: `systemctl` inteiro daria
+      # root de volta por `edit`, `link` e `set-property`.
+      Cmnd_Alias AGENT_UNITS = /usr/bin/systemctl start *, \
+          /usr/bin/systemctl stop *, /usr/bin/systemctl restart *, \
+          /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, \
+          /usr/bin/systemctl daemon-reload, /usr/bin/systemctl reboot
+      Cmnd_Alias AGENT_DIAG = /usr/bin/systemctl status *, \
+          /usr/bin/systemctl is-active *, /usr/bin/systemctl list-timers *, \
+          /usr/bin/cloud-init status, /usr/bin/cloud-init status --long, \
+          /usr/sbin/ufw status, /usr/bin/mount -a, \
+          /usr/bin/journalctl -u agentd-api.service *, \
+          /usr/bin/journalctl -u agentd-notify.service *
+      # pkill preso ao agentd: sem o padrao fixo, `pkill sshd` derruba o acesso.
+      Cmnd_Alias AGENT_KILL = /usr/bin/pkill -9 -f agentd*
+      agent ALL=(root) NOPASSWD: AGENT_UNITS, AGENT_DIAG, AGENT_KILL
+
+      # O operador gerencia catalogo e cofre como agentd, sem virar root e sem
+      # que o MODELO alcance o mesmo caminho: a ferramenta de shell dele ja roda
+      # como agent, e agent nao tem shell de agentd -- so estes dois comandos.
+      Cmnd_Alias AGENT_CATALOG = /workspace/agentd -catalog *, \\
+          /workspace/agentd -vault-init*
+      agent ALL=(agentd) NOPASSWD: AGENT_CATALOG
+
   # --- Servidor X virtual -----------------------------------------------
   # Resolucao fixa em 1920x1080: o mesmo canvas dos decks do dono, e evita
   # depender de redimensionamento dinamico (que o x11vnc nao entrega bem).
@@ -190,11 +259,27 @@ write_files:
       Wants=network-online.target
 
       [Service]
-      User=agent
-      # Chave do modelo em ARQUIVO, nao em Environment=: `systemctl cat` e
-      # /proc/<pid>/environ expoem o ambiente, e rotacionar passaria a exigir
-      # editar a unidade.
-      EnvironmentFile=/workspace/agent/xai.env
+      User=agentd
+      # AGENTD_TOOL_USER e o que faz o cofre valer contra quem ja esta dentro da
+      # maquina: toda ferramenta que o modelo dispara cai para este usuario, que
+      # nao le a identidade age. Sem esta linha o `bash -c` do modelo rodaria
+      # como agentd, dono do cofre.
+      # ORDEM PROPOSITAL, e ela e a diferenca entre proteger e nao proteger.
+      #
+      # O systemd aplica Environment= e EnvironmentFile= NA ORDEM EM QUE APARECEM,
+      # e para a mesma variavel o ULTIMO vence. Com o arquivo por ultimo, quem
+      # pudesse escrever nele sobrescreveria AGENTD_TOOL_USER e desligaria o
+      # proprio rebaixamento -- virando dono do cofre. O arquivo vem primeiro,
+      # a linha fixa vem depois, e nenhum arquivo altera o que decide seguranca.
+      #
+      # E o arquivo saiu de /workspace: la o modelo escreve. Agora e 0640
+      # agentd:agentd em /etc, que ele nem le. O systemd carrega como PID 1,
+      # antes de baixar para User=agentd, entao o servico sobe igual.
+      EnvironmentFile=-/etc/agentd/xai.env
+      # AGENTD_TOOL_USER e o que faz o cofre valer contra quem ja esta dentro da
+      # maquina: toda ferramenta que o modelo dispara cai para este usuario, que
+      # nao le a identidade age.
+      Environment=AGENTD_TOOL_USER=agent
       # 127.0.0.1 de proposito: o acesso e pelo mesmo tunel SSH que ja serve a
       # tela. Escutar em 0.0.0.0 esta a uma regra de firewall mal escrita de
       # estar na internet publica, e o modo de falha e silencioso.
@@ -228,8 +313,12 @@ write_files:
       User=agent
       # O destino vem de um arquivo separado, para trocar o webhook sem editar
       # a unidade. Se ele nao existir, o drenador so lista e nao consome a fila.
-      EnvironmentFile=-/workspace/agent/notify.env
-      ExecStart=/bin/sh -c '/workspace/agentd -notify-drain ${AGENT_WEBHOOK:+-webhook "$AGENT_WEBHOOK"}'
+      EnvironmentFile=-/etc/agentd/notify.env
+      # SEM shell. O destino vinha de arquivo em /workspace -- que o modelo
+      # escreve -- e era interpolado entre aspas dentro de `sh -c`: um valor
+      # fechando a aspa e emendando outro comando seria executado. Sem shell nao
+      # ha o que injetar, e o binario le AGENT_WEBHOOK do ambiente ele mesmo.
+      ExecStart=/workspace/agentd -notify-drain
 
   - path: /etc/systemd/system/agentd-notify.timer
     content: |
@@ -421,6 +510,38 @@ runcmd:
   - [ bash, -c, "for i in $(seq 1 30); do [ -e /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace ] && break; sleep 2; done" ]
   - [ bash, -c, "if [ -e /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace ]; then mkdir -p /workspace && (mount -o discard,defaults,noatime /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace || { mkfs.ext4 -F /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace && mount -o discard,defaults,noatime /dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace; }) && echo '/dev/disk/by-id/scsi-0DO_Volume_agent-computer-workspace /workspace ext4 discard,defaults,noatime,nofail 0 2' >> /etc/fstab && echo VOLUME_MONTADO > /var/lib/agent-computer-volume; else echo SEM_VOLUME > /var/lib/agent-computer-volume; fi" ]
   - [ bash, -c, "mkdir -p /workspace/browser /workspace/projects && chown -R agent:agent /workspace" ]
+
+  # COFRE: estado cifrado no volume duravel, identidade no disco do SISTEMA.
+  #
+  # A separacao e o que torna a foto do volume inutil sozinha. `task snapshot`
+  # copia /workspace para a conta do DigitalOcean; com a identidade aqui em
+  # /etc, quem obtiver a foto leva so texto cifrado.
+  #
+  # Efeito colateral aceito: `update` reconstroi o disco do sistema e leva a
+  # identidade junto. O cofre precisa ser reprovisionado depois -- e o mesmo
+  # passo que ja existia para a chave da xAI, nao um passo novo.
+  - [ bash, -c, "install -d -m 0700 -o agentd -g agentd /etc/agentd" ]
+  # Senha do cofre gerada NA MAQUINA, nunca transportada. 48 bytes em base64
+  # dao ~64 caracteres, bem acima do piso de 24 que o binario exige.
+  - [ bash, -c, "test -s /etc/agentd/vault.pass || (umask 077 && openssl rand -base64 48 | tr -d '\n' > /etc/agentd/vault.pass); chown agentd:agentd /etc/agentd/vault.pass && chmod 600 /etc/agentd/vault.pass" ]
+  # O diretorio de estado passa a ser do agentd, com o grupo agent podendo
+  # trabalhar dentro. setgid (2770) faz todo arquivo novo herdar o grupo, senao
+  # o que o modelo cria fica ilegivel para o servico -- e vice-versa.
+  - [ bash, -c, "install -d -m 2770 -o agentd -g agent /workspace/agent && usermod -aG agent agentd" ]
+  # O cofre em si e 0700 do agentd: pertencer ao grupo da acesso ao TRABALHO,
+  # nunca ao segredo. Esta linha e a que separa as duas coisas.
+  - [ bash, -c, "install -d -m 0700 -o agentd -g agentd /workspace/agent/vault" ]
+  # O AGENTE NAO REESCREVE AS PROPRIAS REGRAS.
+  #
+  # habilidades e conectores sao a instrucao e o alcance de rede do modelo. Sob
+  # /workspace com escrita do grupo, ele editaria a propria habilidade e
+  # cadastraria um conector apontando para onde quisesse -- inclusive para
+  # 169.254.169.254, o metadata da nuvem. Passam a ser do agentd, com o agent
+  # apenas LENDO. Quem instala e o operador, por `sudo -u agentd`.
+  - [ bash, -c, "install -d -m 0755 -o agentd -g agentd /workspace/agent/skills /workspace/agent/connectors" ]
+  # A fila de avisos e o estado das tarefas o servico escreve; o modelo nao tem
+  # o que fazer neles, e uma escrita ali forjaria evento e reabriria tela.
+  - [ bash, -c, "install -d -m 0750 -o agentd -g agent /workspace/agent/tasks /workspace/agent/events" ]
 
   # DESCARTAVEL, explicitamente. A doc separa o que sobrevive do que nao:
   # temporarios, pacote instalado na mao e estado de aplicacao nao commitado

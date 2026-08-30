@@ -19,6 +19,7 @@ import (
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
+	"github.com/andrebassi/agent-computer/agent/internal/secretref"
 )
 
 // Manifest é o formato em disco de um conector.
@@ -69,6 +70,21 @@ type ManifestOperation struct {
 type Registry struct {
 	root       string
 	connectors map[string]*loadedConnector
+	// secrets resolve credencial de conector pelo cofre, caindo para o arquivo.
+	//
+	// Nulo é aceito e significa "só arquivo": é o estado de uma máquina ainda
+	// não provisionada, que precisa continuar funcionando durante a migração.
+	secrets *secretref.Resolver
+}
+
+// WithSecrets liga o cofre ao registro.
+//
+// Devolve o próprio registro para encadear na composição. A credencial resolvida
+// aqui NUNCA sai do processo: o agentd monta a requisição HTTP ele mesmo, então
+// ela não chega a nenhum subprocesso que o modelo dirija.
+func (r *Registry) WithSecrets(store secretref.SecretGetter) *Registry {
+	r.secrets = secretref.New(store)
+	return r
 }
 
 // loadedConnector junta o que o domínio conhece com o que o adaptador precisa
@@ -222,7 +238,7 @@ func (r *Registry) ToolsFor(names []string) ([]ports.Tool, []string) {
 			continue
 		}
 		for _, op := range lc.manifest.Operations {
-			tools = append(tools, newHTTPTool(lc, op, r.secretPath(lc.manifest.Auth.SecretRef)))
+			tools = append(tools, newHTTPTool(lc, op, r.secrets, r.secretPath(lc.manifest.Auth.SecretRef)))
 		}
 	}
 	return tools, missing

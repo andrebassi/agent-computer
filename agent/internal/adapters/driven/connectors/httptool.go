@@ -8,11 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
+	"github.com/andrebassi/agent-computer/agent/internal/secretref"
 )
 
 // httpTimeout evita que uma API lenta prenda a tarefa. É mais curto que o do
@@ -32,7 +32,13 @@ type httpTool struct {
 	baseURL       string
 	auth          ManifestAuth
 	secretPath    string
-	client        *http.Client
+	// secrets resolve a credencial pelo cofre, caindo para o arquivo.
+	//
+	// O valor NUNCA sai deste processo: o agentd monta a requisição HTTP ele
+	// mesmo, então a credencial do conector não chega a nenhum subprocesso que o
+	// modelo dirija.
+	secrets *secretref.Resolver
+	client  *http.Client
 }
 
 // defaultedSchema devolve o esquema da operação, ou um esquema vazio válido.
@@ -52,13 +58,14 @@ func defaultedSchema(raw json.RawMessage) string {
 }
 
 // newHTTPTool monta a ferramenta de uma operação.
-func newHTTPTool(lc *loadedConnector, op ManifestOperation, secretPath string) *httpTool {
+func newHTTPTool(lc *loadedConnector, op ManifestOperation, secrets *secretref.Resolver, secretPath string) *httpTool {
 	return &httpTool{
 		connectorName: lc.connector.Name,
 		operation:     op,
 		baseURL:       strings.TrimRight(lc.manifest.BaseURL, "/"),
 		auth:          lc.manifest.Auth,
 		secretPath:    secretPath,
+		secrets:       secrets,
 		client:        &http.Client{Timeout: httpTimeout},
 	}
 }
@@ -138,7 +145,7 @@ func (h *httpTool) Execute(ctx context.Context, _ int, arguments string) (*ports
 	}
 	req.Header.Set("Accept", "application/json")
 
-	if err := h.applyAuth(req, query); err != nil {
+	if err := h.applyAuth(ctx, req, query); err != nil {
 		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 	}
 	if len(query) > 0 {
@@ -174,16 +181,18 @@ func (h *httpTool) Execute(ctx context.Context, _ int, arguments string) (*ports
 // O segredo é lido do disco a cada chamada, e não guardado em memória. Custa uma
 // leitura de arquivo pequeno e evita que o valor fique num processo de vida
 // longa, onde apareceria num dump de memória ou num core dump.
-func (h *httpTool) applyAuth(req *http.Request, query url.Values) error {
+func (h *httpTool) applyAuth(ctx context.Context, req *http.Request, query url.Values) error {
 	if h.auth.Type == "" || h.secretPath == "" {
 		return nil
 	}
-	data, err := os.ReadFile(h.secretPath)
+	// Cofre primeiro, arquivo depois. A chave segue o nome do conector para o
+	// provisionamento não precisar de uma tabela de correspondência à parte —
+	// tabela é o tipo de coisa que diverge do código sem ninguém notar.
+	secret, _, err := h.secrets.Value(ctx, "connectors/"+h.connectorName, h.secretPath)
 	if err != nil {
 		return fmt.Errorf("conector %q sem credencial configurada (agentd -connector-secret %s)",
 			h.connectorName, h.auth.SecretRef)
 	}
-	secret := strings.TrimSpace(string(data))
 
 	switch h.auth.Type {
 	case "bearer":
