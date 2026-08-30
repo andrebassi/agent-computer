@@ -4,3 +4,6 @@ logs/
 # Artefatos de cobertura: gerados a cada execução do gate, e o diff deles é
 # ruído puro — 318 linhas mudaram no último commit sem significar nada.
 agent/cover.out
+
+# Credenciais vivem no volume durável do droplet, nunca no repositório.
+**/anthropic.env

@@ -145,6 +145,21 @@ task destroy      # destrói o droplet (o volume fica)
 
 Para criar tela: `task ssh`, depois `screen-add 2`.
 
+### Dois agentes, com pontos fortes diferentes
+
+| | Ferramentas | Bom para |
+|---|---|---|
+| **agentd** (Grok) | shell, navegador, conectores, habilidades, take-over | navegar, chamar API, tarefa com barreira sensível |
+| **Claude Code** | edição de arquivo, git, busca, subagentes | mexer em código e em muitos arquivos |
+
+O Claude Code roda com a chave em `/workspace/agent/anthropic.env` (permissão
+`0600`), carregada por `set -a; . /workspace/agent/anthropic.env; set +a`.
+
+⚠️ **A chave fica ao alcance de qualquer agente da máquina** — o computador é
+compartilhado por construção, e é a mesma consequência que a documentação avisa
+sobre credenciais de linha de comando. Não coloque ali chave que outro agente
+não deva usar.
+
 ### O agente
 
 Dentro da máquina, `/workspace/agentd`:
