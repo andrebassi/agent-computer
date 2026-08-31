@@ -1,0 +1,53 @@
+# Fontes de dados provisionadas em arquivo, nao clicadas na tela.
+#
+# Motivo: fonte de dados criada a mao vive no banco SQLite do Grafana, que e
+# estado que ninguem versiona. Na primeira vez que alguem apagar ./data para
+# comecar limpo, some -- e a pessoa refaz de memoria, com um campo diferente.
+apiVersion: 1
+
+datasources:
+  # VictoriaTraces pela fonte JAEGER, que e nativa do Grafana.
+  #
+  # Medido em 31/08/2026: o plugin `victoriametrics-traces-datasource` NAO
+  # existe no catalogo (o `grafana cli` devolve "404: Plugin not found"), mas o
+  # VictoriaTraces serve a API do Jaeger em /select/jaeger -- ela ja respondeu
+  # {"data":["agentd"]} antes de qualquer configuracao aqui.
+  #
+  # Isso e melhor que o plugin: uma dependencia externa a menos, e a fonte
+  # Jaeger vem com o Grafana, entao funciona numa maquina sem rede.
+  - name: VictoriaTraces
+    type: jaeger
+    uid: victoriatraces
+    access: proxy
+    url: http://127.0.0.1:10428/select/jaeger
+    isDefault: true
+    jsonData:
+      # Liga o trace ao log: clicar num span leva as linhas do agentd daquele
+      # trace_id. E o que torna o `trace_id=` no activity.log util em vez de
+      # decorativo.
+      tracesToLogsV2:
+        datasourceUid: victorialogs
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        filterByTraceID: true
+
+  - name: VictoriaMetrics
+    type: prometheus
+    uid: victoriametrics
+    access: proxy
+    url: http://127.0.0.1:8428
+    jsonData:
+      # Exemplar e o que permite ir do bucket lento do histograma ate o trace
+      # daquela tarefa especifica -- sem por task.ID como label, que explodiria a
+      # cardinalidade (o id e task-<UnixNano>, unico por tarefa).
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: victoriatraces
+      prometheusType: Prometheus
+      prometheusVersion: 2.53.0
+
+  - name: VictoriaLogs
+    type: victoriametrics-logs-datasource
+    uid: victorialogs
+    access: proxy
+    url: http://127.0.0.1:9428

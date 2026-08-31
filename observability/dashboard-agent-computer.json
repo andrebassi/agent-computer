@@ -1,0 +1,262 @@
+{
+  "uid": "agent-computer",
+  "title": "agent-computer",
+  "description": "As tres camadas de observacao numa tela: o que o agente fez, o que o modelo executou, e como a maquina reagiu. ATENCAO: o VictoriaMetrics preserva os pontos do nome vindo do OTLP e nao acrescenta _total. Consulta na convencao Prometheus (agentd_model_tokens_total) devolve vazio SEM erro -- o painel parece sem dado em vez de com consulta errada. Use {__name__=\"agentd.model.tokens\"}.",
+  "tags": [
+    "agent-computer",
+    "ebpf",
+    "gen_ai"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Camada 1 — o que o agente fez",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Custo de inferencia por minuto",
+      "description": "A observacao que o README ja registra: em agente autonomo a inferencia custa mais que o servidor. Sem esta serie o numero so existia dentro de cada tarefa.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate({__name__=\"agentd.model.cost.usd\"}[5m])) * 60",
+          "legendFormat": "US$/min"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Tokens por tipo",
+      "description": "Separados de proposito: o cache custa 4x menos, e somar os tres num numero so superestimaria o gasto na mesma proporcao.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (\"agentd.token.type\") (rate({__name__=\"agentd.model.tokens\"}[5m]))",
+          "legendFormat": "{{agentd.token.type}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Duracao por ferramenta (p95)",
+      "description": "O instrumento que nao existia: ate 31/08/2026 nenhuma ferramenta era cronometrada, e 'a tarefa demorou' nao se decompunha em modelo, navegador e shell. Percentil e nao media -- uma chamada de 40s entre noventa de 2s desaparece numa media. A consulta usa `increase` sobre $__range, e nao `rate` de 5m: com rate o painel fica vazio numa maquina de uso esporadico, porque sao necessarios dois pontos na janela e o exportador envia a cada 30s.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (\"agentd.tool.name\", le) (increase({__name__=\"agentd.tool.duration_bucket\"}[$__range])))",
+          "legendFormat": "{{agentd.tool.name}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Desfecho das tarefas",
+      "description": "A pergunta que motivou o trabalho todo: 31 de 123 tarefas terminaram 'blocked' e ninguem sabia.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 20,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (\"agentd.task.state\") (rate({__name__=\"agentd.task.outcomes\"}[15m]))",
+          "legendFormat": "{{agentd.task.state}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Camada 2 — o que o modelo executou (kernel)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "Todo execve da maquina",
+      "description": "Visto no kernel por eBPF, fora do alcance do usuario `agent`. O caminho e o COMPLETO: `comm` tem 16 bytes e truncaria /usr/local/bin/agentd para 'agentd'.",
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "victorialogs"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "source:agent-probe AND kind:exec"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "Conexoes de saida — PRIVADO em destaque",
+      "description": "Fecha o limite que SECURITY.md admite em :202-205: 'a ferramenta de shell alcanca a rede interna diretamente, e nada aqui a limita'. Nao limita: registra. 169.254.169.254 e o endereco de metadados da nuvem.",
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "victorialogs"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "source:agent-probe AND kind:connect"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Camada 3 — por que a maquina degradou",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "logs",
+      "title": "Pressao e memoria (PSI)",
+      "description": "NAO e eBPF, e dizer isso e parte do desenho: o kernel ja calcula a pressao, e uma probe que a recalculasse seria mais cara e menos precisa. A fracao de memoria vem de MemAvailable, nunca de MemFree -- numa maquina saudavel o MemFree e sempre baixo, porque o kernel usa a RAM ociosa como cache.",
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "victorialogs"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "source:agent-probe AND kind:health"
+        }
+      ]
+    }
+  ]
+}
