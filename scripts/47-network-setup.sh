@@ -42,6 +42,24 @@ echo "=== transporte: $AGENT_NETWORK ==="
 setup_tailscale() {
   local authKey
   authKey="$(timeout 30s pass show bassi/tailscale/authkey 2>/dev/null | head -1)"
+
+  # 🛑 O provisionamento NÃO pode ir pela malha — seria circular.
+  #
+  # `root_ssh` resolve o destino por `agent_host()`, e em `AGENT_NETWORK=tailscale`
+  # essa função exige a malha e falha alto quando o nó não está nela. Mas o nó só
+  # não está nela porque é exatamente isto que se vai consertar: para pôr a
+  # máquina na malha é preciso alcançá-la primeiro, e o único caminho que não
+  # depende do resultado é o IP público.
+  #
+  # Medido em 31/08/2026, na primeira execução real: o script morreu com
+  # "o nó não está na malha" seguido de "droplet não existe" — a segunda
+  # mensagem vinda do próprio SSH, que ficou sem destino. O erro descrevia o
+  # problema que ele tentava resolver.
+  #
+  # `local` e não atribuição global: o bash tem escopo dinâmico, então
+  # `root_ssh` chamada daqui enxerga este valor, e o `agent_route` do fim volta
+  # a ver o modo que o dono pediu.
+  local AGENT_NETWORK=ssh
   if [ -z "$authKey" ]; then
     echo "🛑 sem authkey em 'bassi/tailscale/authkey'"
     echo
@@ -108,6 +126,10 @@ setup_cloudflared() {
     echo "   Depois: pass insert bassi/cloudflare/tunnel-token"
     return 1
   fi
+
+  # Pelo mesmo motivo do tailscale: o hostname do túnel só resolve depois que o
+  # túnel existe, então alcançar a máquina para criá-lo tem de ir pelo IP.
+  local AGENT_NETWORK=ssh
 
   echo "  instalando o cloudflared e subindo o túnel..."
   # Aspas SIMPLES de propósito: o `$(cat ...)` tem de expandir na máquina, onde o
