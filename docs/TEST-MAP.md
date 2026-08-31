@@ -23,7 +23,7 @@ apenas que o binário executa.
 
 ## Camada 1 — em processo (`task test:cov`, no Mac)
 
-92 arquivos de teste, 90,8% de cobertura total, domínio 100%, com `-race`.
+51 arquivos de teste e 511 funções, 90,2% de cobertura total, domínio 100%, com `-race`.
 
 ⚠️ **É cobertura de _statement_, não de branch** — o Go não mede branch
 nativamente, e inventar o número seria pior que não ter. A compensação é
@@ -231,6 +231,18 @@ Camada nova, documentada em [`GUARDRAILS.md`](GUARDRAILS.md). O que ela fechou:
 | resposta truncada | `finish_reason: "length"` virava `done` **com sucesso** |
 | `Resume` com tela ocupada | tarefa `blocked` virava `failed`, perdendo trabalho e pedido de ajuda |
 | observabilidade do laço | `service.Agent` não tinha logger nenhum |
+| trecho da tarefa, do modelo e da ferramenta | `TestLoopOpensExpectedSpans` — remove-se um dos três pontos de instrumentação e ele reprova nomeando qual |
+| take-over vira evento na telemetria | `TestTakeoverEmitsEvent` |
+| `trace_id` no `activity.log` | `TestJournalCarriesTraceID`, e `TestJournalWithoutTracerStaysUnchanged` para o formato antigo sem telemetria |
+| telemetria não derruba a tarefa | `TestNewWithEndpointDoesNotBlockOnDial` — backend fora do ar não pode impedir o agente de subir |
+| nada de conteúdo vaza para trecho | varredura no fechamento, não teste unitário: nenhum atributo carrega `Content`, `Prompt`, `Output`, `Detail`, `Command` ou `Arguments` |
+| rotação do diário | `TestRotatesWhenOverLimit` e `TestDoesNotRotateBelowLimit` — os dois sentidos, porque rotacionar sempre é tão ruim quanto nunca |
+| decodificação do evento de kernel | `TestDecodeReadsEveryField`, com valores distintos entre si, e `TestEventSizeMatchesContract` travando o tamanho da struct |
+| lixo de memória do kernel não vaza | `TestDecodeStopsAtNul` — o buffer de tamanho fixo traz o que estava ali antes |
+| nome de binário hostil não injeta | `TestHostileFilenameStaysEscaped` — o modelo controla o nome do arquivo que executa |
+| perda de evento é contada, nunca silenciosa | `TestBufferDropsOldestAndCounts` |
+| PSI lido da linha certa | `TestReadUsesSomeNotFull` — `full` quase nunca dispara, e alerta que não dispara ninguém confere |
+| o coletor eBPF vê o `execve` | `scripts/46-ebpf-test.sh` na máquina — canário determinístico, prova de falha nos dois sentidos |
 | memória entre tarefas | inexistente |
 
 A regra que ela segue, e que o ralph não segue: **detectar é código, conter é

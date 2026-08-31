@@ -18,7 +18,7 @@ arquitetura**, montada do zero e validada contra a doc item por item.
 | `task integration-test` | **12 seções na máquina real, contra o Grok real**: do estado durável ao take-over, com conector e habilidade |
 | `scripts/09-persistence-test.sh` | reboot real: serviços sobem sozinhos, sessão do navegador sobrevive |
 | `scripts/12-update-test.sh` | rebuild real: `/workspace` sobrevive, `/scratch` e pacote manual somem |
-| `agent/scripts/coverage-gate.sh` | 91,4% de cobertura, domínio em 100% |
+| `agent/scripts/coverage-gate.sh` | 90,2% de cobertura, domínio em 100% |
 
 Lab — serve para testar o conceito, não para produção.
 
@@ -62,11 +62,29 @@ Cinco camadas, e cada uma pega o que a anterior não alcança. O mapa completo d
 task lint             # 5 gates: variável órfã, API sem token, trava, mensagem inexistente
 task nixos:validate   # config NixOS: sintaxe, ASCII, sistema inteiro
 task test:cov         # cobertura ≥90% de statements, domínio 100%, com -race
+task probe:cov        # o mesmo para o coletor eBPF (módulo probe/, go.mod próprio)
 task suites           # 4 suítes de máquina (43 seções)
 task functional       # 3 testes que CHAMAM O MODELO de verdade
 task hostile          # entrada malformada, degradação, concorrência
 task guardrails-test  # detector bloqueia, lição chega ao prompt, modelo não escreve
+task ebpf:gate:proof  # prova de falha do gate de viabilidade, nos dois sentidos
+task probe:test       # o coletor vê execve E conexão — com prova de falha
 ```
+
+### Observabilidade
+
+O backend roda **no Mac**, e a máquina só empurra — o que preserva o invariante
+que `08-validate.sh` já testa: toda porta em `127.0.0.1`, e só a 22 no firewall.
+
+```bash
+task obs:up           # Grafana + VictoriaTraces + VictoriaLogs + VictoriaMetrics (Nix)
+task obs:open         # o painel `agent-computer`, com as três camadas
+task probe:deploy     # compila os objetos BPF e instala o coletor na máquina
+```
+
+As três camadas, o que cada uma responde e o que ela **não** responde estão em
+[`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md); o detalhe do kernel, em
+[`docs/KERNEL-VISIBILITY.md`](docs/KERNEL-VISIBILITY.md).
 
 A regra que o mapa aplica: **uma funcionalidade tem cobertura quando existe um
 teste que falha se ela for removida.** Contar que algo "existe" não é cobertura —
@@ -2592,7 +2610,7 @@ task reset        # volta ao snapshot
 task destroy      # derruba o droplet (o volume fica, US$ 2/mês)
 
 ## o binário do agente
-task deploy           # gate de cobertura + compila + instala em /workspace
+task deploy           # gate de cobertura + compila + instala em /usr/local/bin, por SSH de root
 task delegation-test  # prova a delegação com a tarefa mista (web + código)
 task web-search-test  # prova a busca com 4 perguntas reais
 task answers          # mostra a RESPOSTA das últimas tarefas, não só o estado
@@ -2973,7 +2991,7 @@ em paralelo. Bateria no teto na segunda tela.
 | Lacuna real | Onde |
 |---|---|
 | cookies não são compartilhados entre telas | §10 — divergência conhecida da doc |
-| `browser.Execute` em 43,8% de cobertura | é o que puxa o pacote `tools` para 85,5% |
+| `browser.Execute` em 43,8% de cobertura | é o que puxa o pacote `tools` para 85,1% |
 
 Trocar o binário não conserta nenhuma das duas.
 
@@ -3040,7 +3058,7 @@ O diagnóstico deste projeto, em 30/08:
 | Harness | Estado |
 |---|---|
 | ferramentas, sandbox (`/workspace` × `/scratch`), permissões, estado durável, erro legível | ✅ forte |
-| observabilidade | ⚠️ fraca |
+| observabilidade | ✅ traces do laço (OTel/`gen_ai`), log correlacionado por `trace_id`, e `execve` visto no KERNEL por eBPF — `docs/OBSERVABILITY.md` |
 
 | Loop | Estado |
 |---|---|
