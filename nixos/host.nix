@@ -750,6 +750,33 @@ PRECOS
     # NixOS trouxe a unidade e deixou o `enable` para tras.
     wantedBy = [ "multi-user.target" ];
     unitConfig.RequiresMountsFor = workspace;
+
+    # Telemetria: os dois endpoints sao BACKENDS DIFERENTES, e confundi-los
+    # produz um erro que parece de rede e nao e.
+    #
+    #   4317  VictoriaTraces, gRPC  -> trechos
+    #   8428  VictoriaMetrics, HTTP -> metricas
+    #
+    # Apontar os dois para 4317 devolve `Unimplemented: MetricsService/Export`,
+    # porque o VictoriaTraces implementa so o servico de traces.
+    #
+    # Os enderecos sao de LOOPBACK e chegam ao Mac pelo tunel reverso, nao por
+    # rota da internet -- e por isso a maquina continua sem escutar em nada
+    # alem da 22, que e o invariante testado por `08-validate.sh`.
+    #
+    # ATENCAO: com o Mac fora do ar isto NAO derruba a tarefa -- o exportador e em lote
+    # e nunca bloqueia, e falha de envio vira aviso em stderr. Foi medido em
+    # `TestNewWithEndpointDoesNotBlockOnDial`.
+    #
+    # Declarado aqui porque ate 31/08/2026 nao estava em lugar nenhum: o codigo
+    # da telemetria existia, era testado, e a unidade subia sem as variaveis --
+    # o que faz o agentd rodar mudo e parecer que a instrumentacao nao funciona.
+    environment = {
+      AGENTD_OTLP_ENDPOINT = "127.0.0.1:4317";
+      AGENTD_OTLP_METRICS_ENDPOINT = "127.0.0.1:8428";
+      AGENTD_LOG_LEVEL = "info";
+    };
+
     serviceConfig = {
       User = "agentd";
       Group = "agentd";

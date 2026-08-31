@@ -31,8 +31,8 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Custo de inferencia por minuto",
-      "description": "A observacao que o README ja registra: em agente autonomo a inferencia custa mais que o servidor. Sem esta serie o numero so existia dentro de cada tarefa.",
+      "title": "Custo de inferência no período",
+      "description": "A observacao que o README ja registra: em agente autonomo a inferencia custa mais que o servidor. Usa `increase` sobre $__range e nao `rate` de 5m -- com rate o painel fica vazio numa maquina de uso esporadico, porque `rate` exige dois pontos na janela e o exportador envia a cada 30 s. Medido em 31/08/2026: uma tarefa isolada produzia 'No data'.",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -55,16 +55,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate({__name__=\"agentd.model.cost.usd\"}[5m])) * 60",
-          "legendFormat": "US$/min"
+          "expr": "sum(increase({__name__=\"agentd.model.cost.usd\"}[$__range]))",
+          "legendFormat": "US$ no período"
         }
       ]
     },
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Tokens por tipo",
-      "description": "Separados de proposito: o cache custa 4x menos, e somar os tres num numero so superestimaria o gasto na mesma proporcao.",
+      "title": "Tokens por tipo no período",
+      "description": "Separados de proposito: o cache custa 4x menos, e somar os tres num numero so superestimaria o gasto na mesma proporcao. `increase` sobre $__range pelo mesmo motivo do painel de custo.",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -86,7 +86,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (\"agentd.token.type\") (rate({__name__=\"agentd.model.tokens\"}[5m]))",
+          "expr": "sum by (\"agentd.token.type\") (increase({__name__=\"agentd.model.tokens\"}[$__range]))",
           "legendFormat": "{{agentd.token.type}}"
         }
       ]
@@ -122,8 +122,8 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Desfecho das tarefas",
-      "description": "A pergunta que motivou o trabalho todo: 31 de 123 tarefas terminaram 'blocked' e ninguem sabia.",
+      "title": "Desfecho das tarefas no período",
+      "description": "A pergunta que motivou o trabalho todo: 31 de 123 tarefas terminaram 'blocked' e ninguem sabia. `increase` sobre $__range: com rate de 15m uma tarefa isolada nao aparece.",
       "datasource": {
         "type": "prometheus",
         "uid": "victoriametrics"
@@ -147,7 +147,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (\"agentd.task.state\") (rate({__name__=\"agentd.task.outcomes\"}[15m]))",
+          "expr": "sum by (\"agentd.task.state\") (increase({__name__=\"agentd.task.outcomes\"}[$__range]))",
           "legendFormat": "{{agentd.task.state}}"
         }
       ]
