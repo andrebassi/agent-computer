@@ -43,7 +43,7 @@ func TestShellCommandIsRejected(t *testing.T) {
 
 // Catálogo malformado é recusado com a causa.
 func TestMalformedCatalogIsRejected(t *testing.T) {
-	casos := map[string]string{
+	cases := map[string]string{
 		"json truncado":      `{"claude":`,
 		"sem comando":        `{"claude":{"cmd":[]}}`,
 		"binário vazio":      `{"claude":{"cmd":["  "]}}`,
@@ -51,9 +51,9 @@ func TestMalformedCatalogIsRejected(t *testing.T) {
 		"nome com maiúscula": `{"Claude":{"cmd":["claude"]}}`,
 		"campo desconhecido": `{"claude":{"comand":["claude"]}}`,
 	}
-	for nome, conteudo := range casos {
-		if _, err := Parse([]byte(conteudo)); err == nil {
-			t.Errorf("%s devia ser recusado", nome)
+	for name, content := range cases {
+		if _, err := Parse([]byte(content)); err == nil {
+			t.Errorf("%s devia ser recusado", name)
 		}
 	}
 }
@@ -71,9 +71,9 @@ func TestUnknownRunnerListsAvailableOnes(t *testing.T) {
 	if !errors.Is(err, ErrUnknownRunner) {
 		t.Fatalf("esperava ErrUnknownRunner, veio %v", err)
 	}
-	for _, esperado := range []string{"claude", "codex"} {
-		if !strings.Contains(err.Error(), esperado) {
-			t.Errorf("a mensagem devia listar %q: %v", esperado, err)
+	for _, expected := range []string{"claude", "codex"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Errorf("a mensagem devia listar %q: %v", expected, err)
 		}
 	}
 }
@@ -107,13 +107,13 @@ func TestPromptPlaceholderIsReplacedPerArgument(t *testing.T) {
 	if stdin {
 		t.Error("este runner não usa entrada padrão")
 	}
-	esperado := []string{"echo", "-f", "/tmp/prompt-42.txt", "--fim"}
-	if len(cmd) != len(esperado) {
+	expected := []string{"echo", "-f", "/tmp/prompt-42.txt", "--fim"}
+	if len(cmd) != len(expected) {
 		t.Fatalf("o vetor mudou de tamanho: %v", cmd)
 	}
-	for i := range esperado {
-		if cmd[i] != esperado[i] {
-			t.Errorf("posição %d: %q, esperava %q", i, cmd[i], esperado[i])
+	for i := range expected {
+		if cmd[i] != expected[i] {
+			t.Errorf("posição %d: %q, esperava %q", i, cmd[i], expected[i])
 		}
 	}
 }
@@ -164,19 +164,19 @@ func TestEmptyCatalogHasItsOwnMessage(t *testing.T) {
 func TestRealCatalogRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runners.json")
-	conteudo := `{
+	content := `{
   "claude": {"cmd": ["echo", "-p", "{prompt}"], "description": "Claude Code"},
   "codex":  {"cmd": ["codex", "exec", "--yolo", "-"], "stdin": true, "description": "Codex"}
 }`
-	if err := os.WriteFile(path, []byte(conteudo), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
 		t.Fatalf("gravando: %v", err)
 	}
 	catalog, err := Load(path)
 	if err != nil {
 		t.Fatalf("lendo: %v", err)
 	}
-	nomes := catalog.Names()
-	if len(nomes) != 2 || nomes[0] != "claude" || nomes[1] != "codex" {
-		t.Fatalf("nomes fora de ordem ou incompletos: %v", nomes)
+	names := catalog.Names()
+	if len(names) != 2 || names[0] != "claude" || names[1] != "codex" {
+		t.Fatalf("nomes fora de ordem ou incompletos: %v", names)
 	}
 }

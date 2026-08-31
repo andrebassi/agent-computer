@@ -92,9 +92,9 @@ func TestPromptTravelsInAFileThatIsCleanedUp(t *testing.T) {
 	resolver := &fakeResolver{cmd: []string{"echo", "{prompt}"}}
 	d := newRunnerDelegate(t, resolver)
 
-	tarefa := "refatore o pacote X e rode os testes"
+	task := "refatore o pacote X e rode os testes"
 	result, err := d.Execute(context.Background(), 1,
-		`{"task":"`+tarefa+`","runner":"eco"}`)
+		`{"task":"`+task+`","runner":"eco"}`)
 	if err != nil {
 		t.Fatalf("execução: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestPromptTravelsInAFileThatIsCleanedUp(t *testing.T) {
 	if resolver.seenPath == "" {
 		t.Fatal("o resolvedor devia ter recebido um caminho de prompt")
 	}
-	if strings.Contains(resolver.seenPath, tarefa) {
+	if strings.Contains(resolver.seenPath, task) {
 		t.Error("o caminho não pode conter o texto da tarefa")
 	}
 	if _, err := os.Stat(resolver.seenPath); !os.IsNotExist(err) {
@@ -193,8 +193,8 @@ func TestPromptFileIsOwnerOnly(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("permissão %o, esperava 600", perm)
 	}
-	conteudo, _ := os.ReadFile(path)
-	if string(conteudo) != "conteúdo sensível" {
-		t.Errorf("o conteúdo devia ser preservado: %q", conteudo)
+	content, _ := os.ReadFile(path)
+	if string(content) != "conteúdo sensível" {
+		t.Errorf("o conteúdo devia ser preservado: %q", content)
 	}
 }

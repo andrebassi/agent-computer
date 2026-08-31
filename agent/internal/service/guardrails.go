@@ -350,16 +350,16 @@ func (a *Agent) recordTurn(ctx context.Context, task *domain.Task, iteration int
 	for _, call := range completion.ToolCalls {
 		tools = append(tools, call.Name)
 	}
-	ferramentas := "nenhuma"
+	toolNames := "nenhuma"
 	if len(tools) > 0 {
-		ferramentas = strings.Join(tools, ",")
+		toolNames = strings.Join(tools, ",")
 	}
 	_ = a.journal.RecordActivity(ctx, fmt.Sprintf(
 		"tarefa=%s tela=%d iteracao=%d turnos=%d duracao=%s tokens=%d/%d parada=%s ferramentas=%s",
 		task.ID, task.Screen, iteration+1, task.TurnsUsed,
 		elapsed.Round(time.Millisecond),
 		completion.PromptTokens, completion.CompletionTokens,
-		completion.StopReason, ferramentas))
+		completion.StopReason, toolNames))
 }
 
 // systemPromptWithLessons devolve a instrução de sistema com as lições anexadas.

@@ -41,19 +41,19 @@ func TestEachRecordGoesToItsOwnFile(t *testing.T) {
 		t.Fatalf("progresso: %v", err)
 	}
 
-	casos := map[string]string{
+	cases := map[string]string{
 		"activity.log": "iteracao=1",
 		"errors.log":   "ferramenta=shell",
 		"progress.md":  "concluida",
 	}
-	for arquivo, esperado := range casos {
-		conteudo, err := os.ReadFile(filepath.Join(dir, arquivo))
+	for file, expected := range cases {
+		content, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {
-			t.Errorf("lendo %s: %v", arquivo, err)
+			t.Errorf("lendo %s: %v", file, err)
 			continue
 		}
-		if !strings.Contains(string(conteudo), esperado) {
-			t.Errorf("%s devia conter %q: %s", arquivo, esperado, conteudo)
+		if !strings.Contains(string(content), expected) {
+			t.Errorf("%s devia conter %q: %s", file, expected, content)
 		}
 	}
 }
@@ -69,13 +69,13 @@ func TestFilesAreGroupReadableAndNotWorldReadable(t *testing.T) {
 	_ = j.RecordActivity(ctx, "linha")
 	_ = j.LearnLesson(ctx, service.GuardrailToolLoop, "não repita")
 
-	for _, arquivo := range []string{"activity.log", "guardrails.md"} {
-		info, err := os.Stat(filepath.Join(dir, arquivo))
+	for _, file := range []string{"activity.log", "guardrails.md"} {
+		info, err := os.Stat(filepath.Join(dir, file))
 		if err != nil {
-			t.Fatalf("stat %s: %v", arquivo, err)
+			t.Fatalf("stat %s: %v", file, err)
 		}
 		if perm := info.Mode().Perm(); perm != fileMode.Perm() {
-			t.Errorf("%s tem permissão %o, esperava %o", arquivo, perm, fileMode.Perm())
+			t.Errorf("%s tem permissão %o, esperava %o", file, perm, fileMode.Perm())
 		}
 	}
 }
@@ -91,15 +91,15 @@ func TestLessonWrittenIsLessonRead(t *testing.T) {
 	if err := j.LearnLesson(ctx, service.GuardrailToolLoop, "curl sem -L não segue redirect"); err != nil {
 		t.Fatalf("aprendendo: %v", err)
 	}
-	lidas, err := j.Lessons()
+	loaded, err := j.Lessons()
 	if err != nil {
 		t.Fatalf("lendo: %v", err)
 	}
-	if !strings.Contains(lidas, "curl sem -L") {
-		t.Fatalf("a lição devia voltar na leitura: %q", lidas)
+	if !strings.Contains(loaded, "curl sem -L") {
+		t.Fatalf("a lição devia voltar na leitura: %q", loaded)
 	}
-	if !strings.Contains(lidas, string(service.GuardrailToolLoop)) {
-		t.Errorf("a origem devia aparecer: %q", lidas)
+	if !strings.Contains(loaded, string(service.GuardrailToolLoop)) {
+		t.Errorf("a origem devia aparecer: %q", loaded)
 	}
 }
 
@@ -109,12 +109,12 @@ func TestLessonWrittenIsLessonRead(t *testing.T) {
 // tarefa começar com um erro no log.
 func TestLessonsOnFreshMachineIsEmptyWithoutError(t *testing.T) {
 	j, _ := newJournal(t, 4096)
-	lidas, err := j.Lessons()
+	loaded, err := j.Lessons()
 	if err != nil {
 		t.Fatalf("máquina nova não devia dar erro: %v", err)
 	}
-	if lidas != "" {
-		t.Fatalf("devia vir vazio, veio %q", lidas)
+	if loaded != "" {
+		t.Fatalf("devia vir vazio, veio %q", loaded)
 	}
 }
 
@@ -126,16 +126,16 @@ func TestLessonsOnFreshMachineIsEmptyWithoutError(t *testing.T) {
 func TestRepeatedLessonDoesNotDuplicate(t *testing.T) {
 	j, _ := newJournal(t, 4096)
 	ctx := context.Background()
-	licao := "o site X exige login antes de buscar"
+	lesson := "o site X exige login antes de buscar"
 
 	for i := 0; i < 3; i++ {
-		if err := j.LearnLesson(ctx, service.GuardrailToolLoop, licao); err != nil {
+		if err := j.LearnLesson(ctx, service.GuardrailToolLoop, lesson); err != nil {
 			t.Fatalf("aprendendo (%d): %v", i, err)
 		}
 	}
-	lidas, _ := j.Lessons()
-	if n := strings.Count(lidas, licao); n != 1 {
-		t.Fatalf("a lição devia aparecer 1 vez, apareceu %d:\n%s", n, lidas)
+	loaded, _ := j.Lessons()
+	if n := strings.Count(loaded, lesson); n != 1 {
+		t.Fatalf("a lição devia aparecer 1 vez, apareceu %d:\n%s", n, loaded)
 	}
 }
 
@@ -151,20 +151,20 @@ func TestOldestLessonIsDroppedAtBudget(t *testing.T) {
 	j, _ := newJournal(t, 130)
 	ctx := context.Background()
 
-	for _, licao := range []string{"primeira-licao-antiga", "segunda-licao", "terceira-licao-nova"} {
-		if err := j.LearnLesson(ctx, service.GuardrailToolLoop, licao); err != nil {
-			t.Fatalf("aprendendo %q: %v", licao, err)
+	for _, lesson := range []string{"primeira-licao-antiga", "segunda-licao", "terceira-licao-nova"} {
+		if err := j.LearnLesson(ctx, service.GuardrailToolLoop, lesson); err != nil {
+			t.Fatalf("aprendendo %q: %v", lesson, err)
 		}
 	}
-	lidas, _ := j.Lessons()
-	if strings.Contains(lidas, "primeira-licao-antiga") {
-		t.Errorf("a mais antiga devia ter saído:\n%s", lidas)
+	loaded, _ := j.Lessons()
+	if strings.Contains(loaded, "primeira-licao-antiga") {
+		t.Errorf("a mais antiga devia ter saído:\n%s", loaded)
 	}
-	if !strings.Contains(lidas, "terceira-licao-nova") {
-		t.Errorf("a mais nova devia ficar:\n%s", lidas)
+	if !strings.Contains(loaded, "terceira-licao-nova") {
+		t.Errorf("a mais nova devia ficar:\n%s", loaded)
 	}
-	if len(lidas) > 130 {
-		t.Errorf("passou do teto: %d bytes", len(lidas))
+	if len(loaded) > 130 {
+		t.Errorf("passou do teto: %d bytes", len(loaded))
 	}
 }
 
@@ -175,9 +175,9 @@ func TestHugeLessonIsTruncated(t *testing.T) {
 	if err := j.LearnLesson(ctx, service.GuardrailToolLoop, strings.Repeat("x", 5000)); err != nil {
 		t.Fatalf("aprendendo: %v", err)
 	}
-	lidas, _ := j.Lessons()
-	if len(lidas) > maxLessonBytes+200 {
-		t.Fatalf("a lição devia ser cortada, veio com %d bytes", len(lidas))
+	loaded, _ := j.Lessons()
+	if len(loaded) > maxLessonBytes+200 {
+		t.Fatalf("a lição devia ser cortada, veio com %d bytes", len(loaded))
 	}
 }
 
@@ -192,9 +192,9 @@ func TestEmptyLessonIsIgnored(t *testing.T) {
 	if err := j.LearnLesson(ctx, service.GuardrailTurnCap, "   "); err != nil {
 		t.Fatalf("não devia falhar: %v", err)
 	}
-	lidas, _ := j.Lessons()
-	if lidas != "" {
-		t.Fatalf("lição vazia não devia gravar nada: %q", lidas)
+	loaded, _ := j.Lessons()
+	if loaded != "" {
+		t.Fatalf("lição vazia não devia gravar nada: %q", loaded)
 	}
 }
 
@@ -207,10 +207,10 @@ func TestNewlineInContentDoesNotBreakLogFormat(t *testing.T) {
 	if err := j.RecordError(context.Background(), "erro\ncom\nvarias\nlinhas"); err != nil {
 		t.Fatalf("gravando: %v", err)
 	}
-	conteudo, _ := os.ReadFile(filepath.Join(dir, "errors.log"))
-	linhas := strings.Split(strings.TrimSpace(string(conteudo)), "\n")
-	if len(linhas) != 1 {
-		t.Fatalf("devia ser 1 linha, veio %d: %q", len(linhas), conteudo)
+	content, _ := os.ReadFile(filepath.Join(dir, "errors.log"))
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("devia ser 1 linha, veio %d: %q", len(lines), content)
 	}
 }
 

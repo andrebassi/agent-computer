@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -362,8 +363,40 @@ func (a *Agent) settle(ctx context.Context, task *domain.Task, conv *domain.Conv
 	if err := a.persist(ctx, task); err != nil {
 		return err
 	}
+	a.recordOutcome(ctx, task, conv)
 	a.publish(ctx, task, conv)
 	return nil
+}
+
+// recordOutcome anota o desfecho da tarefa no diário de progresso.
+//
+// `settle` é o ÚNICO ponto por onde toda tarefa passa ao parar — concluída,
+// falhada ou bloqueada. Anotar em qualquer outro lugar deixaria um dos três
+// desfechos de fora, e seria justamente o que ninguém percebe: o arquivo
+// existiria, teria conteúdo, e estaria incompleto.
+//
+// Não devolve erro, pelo mesmo contrato do `publish`: registrar é efeito
+// colateral, e um disco cheio não pode transformar tarefa concluída em falha.
+func (a *Agent) recordOutcome(ctx context.Context, task *domain.Task, conv *domain.Conversation) {
+	line := fmt.Sprintf("tarefa=%s tela=%d estado=%s turnos=%d",
+		task.ID, task.Screen, task.State, task.TurnsUsed)
+	switch task.State {
+	case domain.StateBlocked:
+		line += fmt.Sprintf(" motivo=%s detalhe=%s", task.BlockReason, task.BlockDetail)
+	case domain.StateFailed:
+		line += fmt.Sprintf(" falha=%s", task.Failure)
+	case domain.StateDone:
+		// A resposta entra RESUMIDA: o progresso é para saber o que aconteceu,
+		// e o texto inteiro já está na conversa gravada.
+		answer := strings.ReplaceAll(conv.LastAnswer(), "\n", " ")
+		if len(answer) > 160 {
+			answer = answer[:160] + "…"
+		}
+		if answer != "" {
+			line += " resposta=" + answer
+		}
+	}
+	_ = a.journal.RecordProgress(ctx, line)
 }
 
 // publish avisa o mundo de fora que a tarefa parou.

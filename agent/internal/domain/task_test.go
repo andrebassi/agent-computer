@@ -244,15 +244,15 @@ func TestGuardrailReasonIsValidAndDistinct(t *testing.T) {
 	if !ValidBlockReason(BlockGuardrail) {
 		t.Fatal("o motivo guardrail devia ser válido")
 	}
-	descricao := BlockGuardrail.Description()
-	if descricao == "" || descricao == "motivo desconhecido" {
-		t.Fatalf("guardrail sem descrição útil: %q", descricao)
+	description := BlockGuardrail.Description()
+	if description == "" || description == "motivo desconhecido" {
+		t.Fatalf("guardrail sem descrição útil: %q", description)
 	}
-	for _, documentado := range []BlockReason{
+	for _, documented := range []BlockReason{
 		BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired,
 	} {
-		if documentado.Description() == descricao {
-			t.Fatalf("guardrail não pode compartilhar a descrição de %q", documentado)
+		if documented.Description() == description {
+			t.Fatalf("guardrail não pode compartilhar a descrição de %q", documented)
 		}
 	}
 }
@@ -263,21 +263,21 @@ func TestGuardrailReasonIsValidAndDistinct(t *testing.T) {
 // a pessoa decide se retoma. Se o guardrail encerrasse a tarefa, parar cedo
 // custaria tudo o que já tinha sido feito.
 func TestGuardrailBlockIsResumable(t *testing.T) {
-	agora := time.Now()
-	task, err := NewTask("t-guard", 1, "faça algo", agora)
+	now := time.Now()
+	task, err := NewTask("t-guard", 1, "faça algo", now)
 	if err != nil {
 		t.Fatalf("criação: %v", err)
 	}
-	if err := task.Start(agora); err != nil {
+	if err := task.Start(now); err != nil {
 		t.Fatalf("início: %v", err)
 	}
-	if err := task.Block(BlockGuardrail, "teto de turnos atingido", agora); err != nil {
+	if err := task.Block(BlockGuardrail, "teto de turnos atingido", now); err != nil {
 		t.Fatalf("bloqueio por guardrail devia ser aceito: %v", err)
 	}
 	if !task.Active() {
 		t.Error("tarefa bloqueada continua ocupando a tela")
 	}
-	if err := task.Resume(agora); err != nil {
+	if err := task.Resume(now); err != nil {
 		t.Fatalf("devia ser retomável: %v", err)
 	}
 	if task.State != StateRunning {

@@ -101,9 +101,9 @@ func TestTurnCapFiresAtLimitWithBothNumbers(t *testing.T) {
 	if hit.Kind != GuardrailTurnCap {
 		t.Fatalf("tipo errado: %s", hit.Kind)
 	}
-	for _, esperado := range []string{"180", "teto"} {
-		if !strings.Contains(hit.Detail, esperado) {
-			t.Errorf("o detalhe devia citar %q: %s", esperado, hit.Detail)
+	for _, expected := range []string{"180", "teto"} {
+		if !strings.Contains(hit.Detail, expected) {
+			t.Errorf("o detalhe devia citar %q: %s", expected, hit.Detail)
 		}
 	}
 }
@@ -117,10 +117,10 @@ func TestTurnCapFiresAtLimitWithBothNumbers(t *testing.T) {
 // mexer no número quebre algo visível.
 func TestToolLoopFiresOnlyOnThirdIdenticalFailure(t *testing.T) {
 	guard := newGuardrailState(time.Now(), 0)
-	for tentativa := 1; tentativa <= 2; tentativa++ {
+	for attempt := 1; attempt <= 2; attempt++ {
 		repeats := guard.observeToolFailure("shell", `{"command":"ls /naoexiste"}`)
 		if hit := checkToolLoop("shell", "args", "erro", repeats); hit != nil {
-			t.Fatalf("disparou cedo demais, na tentativa %d", tentativa)
+			t.Fatalf("disparou cedo demais, na tentativa %d", attempt)
 		}
 	}
 	repeats := guard.observeToolFailure("shell", `{"command":"ls /naoexiste"}`)
@@ -185,13 +185,13 @@ func TestWallClockIsDisabledWithoutBudget(t *testing.T) {
 
 // Antes da fração, calado; depois dela, dispara.
 func TestWallClockFiresOnlyAfterFraction(t *testing.T) {
-	inicio := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	guard := newGuardrailState(inicio, 100*time.Minute)
+	start := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	guard := newGuardrailState(start, 100*time.Minute)
 
-	if hit := guard.checkWallClock(inicio.Add(79 * time.Minute)); hit != nil {
+	if hit := guard.checkWallClock(start.Add(79 * time.Minute)); hit != nil {
 		t.Fatalf("79%% do orçamento não devia disparar: %v", hit.Detail)
 	}
-	hit := guard.checkWallClock(inicio.Add(81 * time.Minute))
+	hit := guard.checkWallClock(start.Add(81 * time.Minute))
 	if hit == nil {
 		t.Fatal("81%% do orçamento devia disparar")
 	}
@@ -208,7 +208,7 @@ func TestWallClockFiresOnlyAfterFraction(t *testing.T) {
 // de ferramenta, e o laço tratava isso como conclusão. A tarefa terminava
 // `done`, com a resposta pela metade e ninguém sabendo.
 func TestTruncatedStopRecognizesProviderLabels(t *testing.T) {
-	casos := map[string]bool{
+	cases := map[string]bool{
 		"length":            true,
 		"max_tokens":        true,
 		"MAX_OUTPUT_TOKENS": true,
@@ -217,9 +217,9 @@ func TestTruncatedStopRecognizesProviderLabels(t *testing.T) {
 		"tool_calls":        false,
 		"":                  false,
 	}
-	for reason, esperado := range casos {
-		if got := truncatedStop(reason); got != esperado {
-			t.Errorf("truncatedStop(%q) = %v, esperava %v", reason, got, esperado)
+	for reason, expected := range cases {
+		if got := truncatedStop(reason); got != expected {
+			t.Errorf("truncatedStop(%q) = %v, esperava %v", reason, got, expected)
 		}
 	}
 }
@@ -233,14 +233,14 @@ func TestTruncatedStopRecognizesProviderLabels(t *testing.T) {
 // acumulada, bloqueio pela mesma máquina do take-over, e lição gravada.
 func TestLoopBlocksOnRepeatedToolFailure(t *testing.T) {
 	journal := &recordingJournal{}
-	falha := &fakeTool{
+	failing := &fakeTool{
 		name:   "shell",
 		result: ports.ToolResult{Output: "ls: No such file or directory", Failed: true},
 	}
 	// O modelo insiste na MESMA chamada — o roteiro repete o suficiente para o
 	// detector ter chance de disparar antes de o roteiro acabar.
-	insistente := repeatedCall("shell", `{"command":"ls /naoexiste"}`, maxIdenticalToolFailures+2)
-	agent, task := newGuardrailAgent(t, &fakeModel{responses: insistente}, falha, journal)
+	insisting := repeatedCall("shell", `{"command":"ls /naoexiste"}`, maxIdenticalToolFailures+2)
+	agent, task := newGuardrailAgent(t, &fakeModel{responses: insisting}, failing, journal)
 	err := agent.Run(context.Background(), task)
 	if err != nil {
 		t.Fatalf("o bloqueio não devia devolver erro: %v", err)
@@ -255,8 +255,8 @@ func TestLoopBlocksOnRepeatedToolFailure(t *testing.T) {
 		t.Errorf("o detalhe devia trazer o erro literal: %s", task.BlockDetail)
 	}
 	// Exatamente três chamadas de ferramenta: a quarta seria desperdício.
-	if falha.calls != maxIdenticalToolFailures {
-		t.Errorf("esperava %d execuções, houve %d", maxIdenticalToolFailures, falha.calls)
+	if failing.calls != maxIdenticalToolFailures {
+		t.Errorf("esperava %d execuções, houve %d", maxIdenticalToolFailures, failing.calls)
 	}
 	if !strings.Contains(journal.joined(), "shell") {
 		t.Error("o diário devia registrar a ferramenta que falhou")
@@ -331,9 +331,9 @@ func TestTurnsAreCountedOnTheTask(t *testing.T) {
 // A contenção já aconteceu; perder a lição é menos grave que perder a parada.
 func TestBlockSurvivesJournalFailure(t *testing.T) {
 	journal := &recordingJournal{failLesson: true}
-	falha := &fakeTool{name: "shell", result: ports.ToolResult{Output: "erro", Failed: true}}
-	insistente := repeatedCall("shell", "{}", maxIdenticalToolFailures+2)
-	agent, task := newGuardrailAgent(t, &fakeModel{responses: insistente}, falha, journal)
+	failing := &fakeTool{name: "shell", result: ports.ToolResult{Output: "erro", Failed: true}}
+	insisting := repeatedCall("shell", "{}", maxIdenticalToolFailures+2)
+	agent, task := newGuardrailAgent(t, &fakeModel{responses: insisting}, failing, journal)
 	if err := agent.Run(context.Background(), task); err != nil {
 		t.Fatalf("não devia devolver erro: %v", err)
 	}
@@ -384,11 +384,11 @@ func newGuardrailAgent(t *testing.T, model ports.LanguageModel, tool ports.Tool,
 func TestLessonReachesTheNextTaskPrompt(t *testing.T) {
 	journal := &recordingJournal{}
 	// Primeira tarefa: a ferramenta falha em laço e o detector aprende.
-	falha := &fakeTool{name: "shell", result: ports.ToolResult{Output: "connection refused", Failed: true}}
-	primeiro, tarefa1 := newGuardrailAgent(t, &fakeModel{
+	failing := &fakeTool{name: "shell", result: ports.ToolResult{Output: "connection refused", Failed: true}}
+	first, firstTask := newGuardrailAgent(t, &fakeModel{
 		responses: repeatedCall("shell", `{"command":"curl interno"}`, maxIdenticalToolFailures+2),
-	}, falha, journal)
-	if err := primeiro.Run(context.Background(), tarefa1); err != nil {
+	}, failing, journal)
+	if err := first.Run(context.Background(), firstTask); err != nil {
 		t.Fatalf("primeira tarefa: %v", err)
 	}
 	if len(journal.lessons) == 0 {
@@ -396,21 +396,21 @@ func TestLessonReachesTheNextTaskPrompt(t *testing.T) {
 	}
 
 	// Segunda tarefa: um modelo que só registra o que recebeu.
-	espiao := &promptSpy{}
-	segundo := NewAgent(espiao, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+	spy := &promptSpy{}
+	second := NewAgent(spy, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
 		fixedClock, "instruções", WithGuardrailJournal(journal))
-	tarefa2, err := domain.NewTask("guardrail-2", 1, "outra coisa", fixedClock())
+	secondTask, err := domain.NewTask("guardrail-2", 1, "outra coisa", fixedClock())
 	if err != nil {
 		t.Fatalf("criando a segunda tarefa: %v", err)
 	}
-	if err := segundo.Run(context.Background(), tarefa2); err != nil {
+	if err := second.Run(context.Background(), secondTask); err != nil {
 		t.Fatalf("segunda tarefa: %v", err)
 	}
 
-	if !strings.Contains(espiao.systemSeen, "connection refused") {
-		t.Fatalf("a lição devia estar no prompt de sistema da tarefa seguinte:\n%s", espiao.systemSeen)
+	if !strings.Contains(spy.systemSeen, "connection refused") {
+		t.Fatalf("a lição devia estar no prompt de sistema da tarefa seguinte:\n%s", spy.systemSeen)
 	}
-	if !strings.Contains(espiao.systemSeen, "instruções") {
+	if !strings.Contains(spy.systemSeen, "instruções") {
 		t.Error("a instrução original devia continuar presente")
 	}
 }
@@ -420,15 +420,15 @@ func TestLessonReachesTheNextTaskPrompt(t *testing.T) {
 // Sem este caso, um bug que anexasse um bloco vazio passaria — e um bloco vazio
 // no prefixo invalida o cache de prompt do fornecedor a cada tarefa.
 func TestSystemPromptIsUntouchedWithoutLessons(t *testing.T) {
-	espiao := &promptSpy{}
-	agent := NewAgent(espiao, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+	spy := &promptSpy{}
+	agent := NewAgent(spy, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
 		fixedClock, "instruções", WithGuardrailJournal(&recordingJournal{}))
 	task, _ := domain.NewTask("t", 1, "faça", fixedClock())
 	if err := agent.Run(context.Background(), task); err != nil {
 		t.Fatalf("execução: %v", err)
 	}
-	if espiao.systemSeen != "instruções" {
-		t.Fatalf("o prompt devia ficar intacto, veio %q", espiao.systemSeen)
+	if spy.systemSeen != "instruções" {
+		t.Fatalf("o prompt devia ficar intacto, veio %q", spy.systemSeen)
 	}
 }
 
@@ -529,9 +529,9 @@ func TestApplyHitOnNonRunningTaskReturnsError(t *testing.T) {
 // agente nem, pior, desligar o detector — cair no padrão é o comportamento
 // seguro.
 func TestThresholdFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
-	casos := []struct {
-		valor    string
-		esperado int
+	cases := []struct {
+		value    string
+		expected int
 	}{
 		{"5", 5},
 		{"", 42},
@@ -540,10 +540,65 @@ func TestThresholdFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
 		{"0", 42},
 		{"  7  ", 7},
 	}
-	for _, caso := range casos {
-		t.Setenv("AGENTD_TESTE_LIMIAR", caso.valor)
-		if got := envInt("AGENTD_TESTE_LIMIAR", 42); got != caso.esperado {
-			t.Errorf("envInt(%q) = %d, esperava %d", caso.valor, got, caso.esperado)
+	for _, caso := range cases {
+		t.Setenv("AGENTD_TESTE_LIMIAR", caso.value)
+		if got := envInt("AGENTD_TESTE_LIMIAR", 42); got != caso.expected {
+			t.Errorf("envInt(%q) = %d, esperava %d", caso.value, got, caso.expected)
 		}
+	}
+}
+
+// TODO desfecho vai para o progresso: concluída, falhada e bloqueada.
+//
+// Este teste existe por um furo que eu mesmo abri: `RecordProgress` foi escrito,
+// testado no adaptador, e NENHUM caminho de produção o chamava. O arquivo
+// existia na máquina com 0 bytes — exatamente o defeito do ralph que este
+// trabalho critica, reintroduzido por descuido de fiação.
+//
+// Testar o método isolado não pega isso. Só testar que o LAÇO o chama pega.
+func TestEveryOutcomeIsRecordedInProgress(t *testing.T) {
+	cases := []struct {
+		name     string
+		model    ports.LanguageModel
+		tool     ports.Tool
+		expected string
+	}{
+		{
+			name:     "concluída",
+			model:    &fakeModel{responses: []ports.Completion{{Content: "terminei bem", StopReason: "stop"}}},
+			expected: "estado=done",
+		},
+		{
+			name:     "bloqueada por guardrail",
+			model:    &fakeModel{responses: repeatedCall("shell", "{}", maxIdenticalToolFailures+2)},
+			tool:     &fakeTool{name: "shell", result: ports.ToolResult{Output: "erro", Failed: true}},
+			expected: "estado=blocked",
+		},
+		{
+			name:     "falhada pelo modelo",
+			model:    &fakeModel{err: errors.New("api fora do ar")},
+			expected: "estado=failed",
+		},
+	}
+	for _, caso := range cases {
+		t.Run(caso.name, func(t *testing.T) {
+			journal := &recordingJournal{}
+			agent, task := newGuardrailAgent(t, caso.model, caso.tool, journal)
+			_ = agent.Run(context.Background(), task)
+
+			journal.mu.Lock()
+			progress := strings.Join(journal.progress, "\n")
+			journal.mu.Unlock()
+
+			if progress == "" {
+				t.Fatal("o desfecho não foi registrado no progresso")
+			}
+			if !strings.Contains(progress, caso.expected) {
+				t.Errorf("esperava %q no progresso, veio: %s", caso.expected, progress)
+			}
+			if !strings.Contains(progress, task.ID) {
+				t.Errorf("o id da tarefa devia estar no progresso: %s", progress)
+			}
+		})
 	}
 }
