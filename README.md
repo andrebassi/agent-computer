@@ -502,6 +502,7 @@ existem para evitar.
 task lint              # 5 gates de script, no Mac
 task nixos:validate    # config NixOS: sintaxe, ASCII, sistema inteiro
 task test:cov          # cobertura ≥90%, domínio 100%, com -race
+STRICT_PACKAGES=1 task test:cov   # e reprova pacote abaixo do piso (8 hoje)
 task suites            # 6 suítes de máquina
 task guardrails-test   # os detectores bloqueiam de verdade
 task redaction-test    # o segredo some do histórico

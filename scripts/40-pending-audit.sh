@@ -13,8 +13,27 @@ root_ssh "systemctl show agentd-api -p Environment | tr ' ' '\n' | grep -i AGENT
 
 echo
 echo "=== 2. fila de avisos: ha destino configurado? ==="
-root_ssh "systemctl show agentd-notify -p Environment | tr ' ' '\n' | grep -i AGENT_WEBHOOK || echo 'SEM_WEBHOOK'" 2>&1 | sed 's/^/  /'
+# Ler o ARQUIVO, e nao `systemctl show -p Environment`.
+#
+# A variavel vem de EnvironmentFile, que o `show` NAO expande: a propriedade sai
+# vazia mesmo com o destino configurado e funcionando. Medido em 31/08/2026 --
+# esta auditoria imprimia SEM_WEBHOOK enquanto os dois destinos recebiam avisos.
+# Relatorio de pendencia que INVENTA pendencia e pior que nenhum: manda consertar
+# o que esta de pe, e ensina a duvidar do proximo vermelho.
+configurados="$(root_ssh "grep -c '^AGENT_WEBHOOK=' /etc/agentd/notify.env 2>/dev/null || echo 0" 2>/dev/null | tr -dc '0-9')"
+if [ "${configurados:-0}" -gt 0 ]; then
+  echo "  ✅ destino configurado em /etc/agentd/notify.env"
+  # Contar os destinos SEM imprimir as URLs: o topico do ntfy e a unica
+  # credencial que existe, e relatorio costuma ser colado em chamado.
+  quantos="$(root_ssh "grep '^AGENT_WEBHOOK=' /etc/agentd/notify.env | tr ',' '\n' | wc -l" 2>/dev/null | tr -dc '0-9')"
+  echo "  destinos na lista: ${quantos:-1}"
+else
+  echo "  🛑 SEM destino: o agente pede take-over e ninguem fica sabendo"
+fi
 root_ssh "sudo -u agentd agentd -notify-drain 2>&1 | head -1" 2>&1 | sed 's/^/  /'
+# A ultima entrega, que e o que diz se o canal esta VIVO -- destino configurado
+# nao prova entrega, e foi assim que a fila acumulou 41 avisos sem ninguem notar.
+root_ssh "journalctl -u agentd-notify -n 20 --no-pager -o cat 2>/dev/null | grep -E 'entregues|falhou em' | tail -1" 2>&1 | sed 's/^/  ultima entrega: /'
 
 echo
 echo "=== 3. tarefas presas (lock sem processo) ==="
