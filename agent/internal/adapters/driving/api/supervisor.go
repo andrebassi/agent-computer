@@ -7,9 +7,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +41,37 @@ const defaultTaskTimeout = 2 * time.Hour
 // importasse conectores e habilidades estaria chamando o lado de saída, que a
 // direção das setas proíbe.
 type AgentFactory func(prompt string) (runner ports.TaskRunner, expandedPrompt string, err error)
+
+// maxConcurrentTasks é o teto GLOBAL de tarefas rodando ao mesmo tempo.
+//
+// A trava de tela garante uma por tela, e são NOVE telas — o que nunca foi um
+// teto de verdade. Nove tarefas simultâneas nesta máquina significam nove
+// navegadores e, no pior caso, nove delegações de US$ 5,00 cada.
+//
+// QUATRO é medido nesta máquina (2026-08-31), não escolhido por gosto:
+//
+//	memória total          3.919 MB, com ~2.600 livres em repouso
+//	Chrome por tela        ~370 MB (medido com duas telas de pé)
+//	agentd                 282 MB
+//	CPU                    2 vCPU
+//
+// Quatro tarefas com navegador dão ~1,5 GB de Chrome, que cabe nos 2,6 GB com
+// folga para o trabalho. Nove dariam 3,3 GB e estourariam a máquina — e o modo
+// de falha do estouro é o pior possível: o OOM killer escolhe a vítima, e ela
+// costuma ser o processo maior, que é o próprio agentd.
+//
+// O limite é de tarefas EM EXECUÇÃO. Tarefa bloqueada esperando uma pessoa não
+// conta: ela não gasta CPU nem token, e contá-la faria o take-over de uma tela
+// impedir trabalho em outra.
+const maxConcurrentTasks = 4
+
+// ErrTooManyTasks marca recusa por teto global, e é distinta de tela ocupada.
+//
+// A diferença importa para quem chama: tela ocupada se resolve retomando ou
+// abandonando AQUELA tarefa (409, conflito); teto global se resolve esperando
+// (429, tente de novo). Misturar as duas faria o cliente tentar abandonar uma
+// tarefa que não é o problema.
+var ErrTooManyTasks = errors.New("tarefas demais rodando ao mesmo tempo")
 
 // BusyError diz QUAL tarefa segura a tela.
 //
@@ -77,6 +112,9 @@ type Supervisor struct {
 	clock    func() time.Time
 	timeout  time.Duration
 	log      *slog.Logger
+	// maxRunning é o teto global, ajustável para o teste não depender do
+	// número de produção.
+	maxRunning int
 
 	mu sync.Mutex
 	// byScreen é a exclusividade que importa: uma tarefa por TELA, não por id.
@@ -100,7 +138,8 @@ func NewSupervisor(base context.Context, factory AgentFactory, store ports.TaskS
 	return &Supervisor{
 		base: base, newAgent: factory, store: store, screen: screen, lock: lock,
 		clock: clock, timeout: timeout, log: log,
-		byScreen: map[int]*run{}, byID: map[string]*run{},
+		maxRunning: envConcurrency(),
+		byScreen:   map[int]*run{}, byID: map[string]*run{},
 	}
 }
 
@@ -154,6 +193,12 @@ func (s *Supervisor) Start(ctx context.Context, screenNumber int, prompt string)
 // boot anterior e tarefa criada pelo CLI; a trava pega o CLI rodando AGORA em
 // outro processo, cuja prova de vida não está no disco.
 func (s *Supervisor) screenIsFree(ctx context.Context, screenNumber int) error {
+	// O teto GLOBAL vem antes do teste de tela: recusar por "tela ocupada" uma
+	// tarefa que a máquina não comportaria mandaria quem chamou tentar outra
+	// tela, e a próxima falharia igual — com a mensagem errada nas duas vezes.
+	if running := len(s.byScreen); running >= s.maxRunning {
+		return fmt.Errorf("%w: %d rodando, teto %d", ErrTooManyTasks, running, s.maxRunning)
+	}
 	if r, ok := s.byScreen[screenNumber]; ok {
 		return &BusyError{Task: r.task}
 	}
@@ -353,4 +398,21 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 // newTaskID gera um identificador ordenável por tempo.
 func newTaskID(now time.Time) string {
 	return fmt.Sprintf("task-%d", now.UnixNano())
+}
+
+// envConcurrency lê o teto global do ambiente, ou devolve o padrão.
+//
+// Ajustável porque a máquina pode crescer: num droplet maior o teto certo é
+// outro, e trocá-lo não deveria exigir recompilar. Valor inválido cai no
+// padrão — teto desligado por engano é o defeito que este código evita.
+func envConcurrency() int {
+	raw := strings.TrimSpace(os.Getenv("AGENTD_MAX_CONCURRENT_TASKS"))
+	if raw == "" {
+		return maxConcurrentTasks
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return maxConcurrentTasks
+	}
+	return value
 }

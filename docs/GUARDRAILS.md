@@ -82,6 +82,49 @@ do produto de propósito: aqueles descrevem o que o **site** exige; este é nós
 parando o agente. Reaproveitar `human_required` faria a tela dizer "o site exige
 uma pessoa" quando o site não exigiu nada.
 
+### Teto global de tarefas simultâneas
+
+A trava de tela garante uma tarefa **por tela** — e são nove telas, o que nunca
+foi um teto de máquina. Nove tarefas simultâneas significam nove navegadores e,
+no pior caso, nove delegações de US$ 5,00 cada.
+
+**Quatro** é medido nesta máquina, não escolhido por gosto:
+
+| | |
+|---|---|
+| memória total | 3.919 MB, ~2.600 livres em repouso |
+| Chrome por tela | ~370 MB (medido com duas telas de pé) |
+| `agentd` | 282 MB |
+| CPU | 2 vCPU |
+
+Quatro tarefas com navegador dão ~1,5 GB de Chrome, que cabe com folga. Nove
+dariam 3,3 GB e estourariam — e o modo de falha do estouro é o pior: o OOM
+killer escolhe a vítima, e ela costuma ser o processo maior, que é o `agentd`.
+
+Ajustável por `AGENTD_MAX_CONCURRENT_TASKS`, porque num droplet maior o teto
+certo é outro.
+
+**Conta só tarefa em EXECUÇÃO.** Tarefa bloqueada esperando uma pessoa não
+ocupa vaga: ela não gasta CPU nem token, e contá-la faria o take-over numa tela
+impedir trabalho em outra.
+
+#### 429, e não 409
+
+A distinção é para quem chama, e a máquina devolve os três códigos:
+
+| Código | Situação | Como se resolve |
+|---|---|---|
+| `201` | tela livre, máquina com vaga | — |
+| `409` | **aquela tela** está ocupada | retomar ou abandonar a tarefa que a segura |
+| `429` | a **máquina** está cheia | esperar |
+
+Misturar os dois faria o cliente tentar abandonar uma tarefa que não é a causa,
+ou trocar de tela — e a próxima falharia igual, com a mensagem errada nas duas
+vezes. Por isso o teto global é conferido **antes** do teste de tela.
+
+Medido na máquina: `{"error":"tarefas demais rodando ao mesmo tempo: 4 rodando,
+teto 4","hint":"espere uma tarefa terminar..."}`
+
 ### Teto de custo
 
 Em dólares, não em tokens: token não se compara entre modelos, e o limite que
@@ -178,8 +221,6 @@ ela, um detector quebrado que bloqueasse tudo passaria em todas as demais.
 
 ## O que continua de fora
 
-- **limite global de tarefas simultâneas.** São nove telas, e cada uma tem sua
-  trava; não há teto agregado.
 - **validação de argumento contra o `Schema`** anunciado ao modelo. Campo
   desconhecido é ignorado em silêncio pelas ferramentas — o oposto do que a API
   HTTP faz com `DisallowUnknownFields`.

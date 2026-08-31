@@ -141,6 +141,13 @@ func (s *Server) writeStartError(w http.ResponseWriter, err error) {
 			"hint": fmt.Sprintf("POST /tasks/%s/resume ou POST /tasks/%s/abandon",
 				busy.Task.ID, busy.Task.ID),
 		})
+	case errors.Is(err, ErrTooManyTasks):
+		// 429, e não 409: o problema não é ESTA tela, é a máquina cheia.
+		// Mandar 409 faria o cliente tentar abandonar uma tarefa que não é a
+		// causa, ou trocar de tela — e a próxima falharia igual.
+		writeError(w, http.StatusTooManyRequests, err.Error(), map[string]string{
+			"hint": "espere uma tarefa terminar, ou consulte GET /tasks/<id> das que estão rodando",
+		})
 	case errors.Is(err, domain.ErrScreenBusy):
 		writeError(w, http.StatusConflict, err.Error(), nil)
 	case errors.Is(err, ErrShuttingDown):

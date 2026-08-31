@@ -87,7 +87,7 @@ Contenção do **comportamento em execução** — separada da de infraestrutura
 [`SECURITY.md`](docs/SECURITY.md). O detalhe inteiro em
 [`GUARDRAILS.md`](docs/GUARDRAILS.md).
 
-Quatro detectores, todos em código, todos terminando em `blocked` + take-over —
+Cinco detectores, todos em código, todos terminando em `blocked` + take-over —
 a mesma máquina que o agente usa para pedir ajuda diante de uma senha:
 
 | Detector | Limiar | Ajustável por |
@@ -96,6 +96,7 @@ a mesma máquina que o agente usa para pedir ajuda diante de uma senha:
 | mesma ferramenta falhando com os mesmos argumentos | 3 | `AGENTD_MAX_TOOL_FAILURES` |
 | custo acumulado em dólares | US$ 3,00 | `AGENTD_MAX_COST_USD` |
 | fração do tempo da tarefa | 80% de 2 h | — |
+| **tarefas simultâneas na máquina** | 4 | `AGENTD_MAX_CONCURRENT_TASKS` |
 
 Mais quatro arquivos de memória em `/workspace/agent/`, `agentd:agent 0640` — o
 modelo lê e **nunca escreve**:

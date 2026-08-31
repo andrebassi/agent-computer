@@ -3,150 +3,209 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
+	"github.com/andrebassi/agent-computer/agent/internal/ports"
 )
 
-// Oito requisições simultâneas na MESMA tela: exatamente uma vence.
+// blockingRunner segura toda tarefa até ser liberado, para várias ficarem
+// rodando ao mesmo tempo.
 //
-// É o teste do TOCTOU. Sem o mutex cobrindo checar E gravar, duas requisições
-// leem "tela livre" ao mesmo tempo e as duas passam — e o resultado não é uma
-// falha, são duas tarefas disputando o mesmo teclado, produzindo cliques
-// intercalados que não falham, só fazem a coisa errada.
-func TestConcurrentStartsOnlyOneWins(t *testing.T) {
-	runner := &fakeRunner{release: make(chan struct{})}
-	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
-
-	const attempts = 8
-	var accepted, recusados atomic.Int32
-	var startSignal sync.WaitGroup
-	var finished sync.WaitGroup
-	startSignal.Add(1)
-
-	for i := 0; i < attempts; i++ {
-		finished.Add(1)
-		go func() {
-			defer finished.Done()
-			// Todas partem juntas: é o que torna a corrida provável.
-			startSignal.Wait()
-			if _, err := sup.Start(context.Background(), 1, "faça algo"); err != nil {
-				if errors.Is(err, domain.ErrScreenBusy) {
-					recusados.Add(1)
-				}
-				return
-			}
-			accepted.Add(1)
-		}()
-	}
-	startSignal.Done()
-	finished.Wait()
-
-	if accepted.Load() != 1 {
-		t.Fatalf("exatamente uma devia entrar, entraram %d", accepted.Load())
-	}
-	if recusados.Load() != attempts-1 {
-		t.Fatalf("as outras %d deviam ser recusadas por tela ocupada, foram %d",
-			attempts-1, recusados.Load())
-	}
-	close(runner.release)
+// O `fakeRunner` do arquivo vizinho tem um canal só, que fecha na primeira
+// entrada — serve para uma tarefa, e este teste precisa de várias simultâneas.
+type blockingRunner struct {
+	mu      sync.Mutex
+	release chan struct{}
 }
 
-// A recusa diz QUAL tarefa segura a tela.
-//
-// Sem isso, quem chamou precisa adivinhar o que retomar ou abandonar.
-func TestBusyErrorNamesTheTaskHoldingTheScreen(t *testing.T) {
-	runner := &fakeRunner{release: make(chan struct{})}
-	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
-
-	first, err := sup.Start(context.Background(), 2, "primeira")
-	if err != nil {
-		t.Fatalf("Start falhou: %v", err)
-	}
-	_, err = sup.Start(context.Background(), 2, "segunda")
-
-	var busy *BusyError
-	if !errors.As(err, &busy) {
-		t.Fatalf("esperava BusyError, veio %v", err)
-	}
-	if busy.Task.ID != first.ID {
-		t.Fatalf("devia nomear a tarefa que segura a tela: %s", busy.Task.ID)
-	}
-	// E continua reconhecível pelo erro de domínio, para quem checa por tipo.
-	if !errors.Is(err, domain.ErrScreenBusy) {
-		t.Fatalf("BusyError devia embrulhar ErrScreenBusy: %v", err)
-	}
-	close(runner.release)
+// Run bloqueia até o canal ser fechado.
+func (b *blockingRunner) Run(_ context.Context, task *domain.Task) error {
+	b.mu.Lock()
+	release := b.release
+	b.mu.Unlock()
+	<-release
+	_ = task.Start(time.Now())
+	_ = task.Finish(time.Now())
+	return nil
 }
 
-// Telas DIFERENTES rodam em paralelo — a exclusividade é por tela, não global.
-func TestDifferentScreensRunInParallel(t *testing.T) {
-	runner := &fakeRunner{release: make(chan struct{})}
-	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
+// Resume repete o comportamento do Run.
+func (b *blockingRunner) Resume(ctx context.Context, task *domain.Task, _ string) error {
+	return b.Run(ctx, task)
+}
 
-	for _, tela := range []int{1, 2, 3} {
-		if _, err := sup.Start(context.Background(), tela, "faça algo"); err != nil {
-			t.Fatalf("tela %d devia ser aceita: %v", tela, err)
+// newLimitedSupervisor monta um supervisor com teto global conhecido.
+//
+// O teto vem por parâmetro em vez do padrão de produção: amarrar o teste ao
+// número 4 o quebraria na primeira vez que a máquina crescesse, e o que se
+// quer verificar é o COMPORTAMENTO do teto, não o valor dele.
+func newLimitedSupervisor(t *testing.T, runner ports.TaskRunner, limit int) *Supervisor {
+	t.Helper()
+	base, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sup := NewSupervisor(base, factoryFor(runner), newFakeStore(), &fakeScreen{},
+		&fakeLock{}, fixedClock(), time.Minute, quietLogger())
+	sup.maxRunning = limit
+	return sup
+}
+
+// Passando do teto, a criação é RECUSADA — mesmo com tela livre.
+//
+// É a garantia central: a trava de tela nunca foi teto de máquina. São nove
+// telas, e nove tarefas simultâneas significam nove navegadores e, no pior
+// caso, nove delegações de US$ 5,00.
+func TestGlobalCapRefusesBeyondLimitEvenWithFreeScreens(t *testing.T) {
+	runner := &blockingRunner{release: make(chan struct{})}
+	sup := newLimitedSupervisor(t, runner, 2)
+	defer close(runner.release)
+
+	// Duas telas DIFERENTES, ambas livres: só o teto global pode recusar.
+	for screen := 1; screen <= 2; screen++ {
+		if _, err := sup.Start(context.Background(), screen, fmt.Sprintf("t%d", screen)); err != nil {
+			t.Fatalf("tela %d devia ser aceita: %v", screen, err)
 		}
 	}
-	if sup.Running() != 3 {
-		t.Fatalf("esperava 3 tarefas em voo, veio %d", sup.Running())
+
+	_, err := sup.Start(context.Background(), 3, "t3")
+	if !errors.Is(err, ErrTooManyTasks) {
+		t.Fatalf("a terceira devia bater no teto global, veio %v", err)
 	}
-	close(runner.release)
+	// A mensagem precisa dos dois números: sem eles, quem recebe não sabe se
+	// esperar dois segundos ou repensar o trabalho.
+	if !strings.Contains(err.Error(), "teto") {
+		t.Errorf("a mensagem devia explicar o teto: %v", err)
+	}
 }
 
-// Tarefa BLOQUEADA no disco ocupa a tela, mesmo sem processo rodando.
+// Abaixo do teto, tudo é aceito — o outro sentido.
 //
-// É o caso que o registro em memória não enxerga: ela sobrou de um boot anterior
-// e continua reservando a tela até alguém agir.
-func TestStartRefusesWhenDiskHasBlockedTask(t *testing.T) {
-	store := newFakeStore()
-	blockedTask, err := domain.NewTask("t-antiga", 1, "antiga", time.Now())
-	if err != nil {
-		t.Fatalf("preparação falhou: %v", err)
-	}
-	_ = blockedTask.Start(time.Now())
-	_ = blockedTask.Block(domain.BlockCaptcha, "resolva", time.Now())
-	store.tasks[blockedTask.ID] = blockedTask
+// Sem este caso, um teto quebrado que recusasse tudo passaria no de cima.
+func TestGlobalCapAcceptsUpToTheLimit(t *testing.T) {
+	runner := &blockingRunner{release: make(chan struct{})}
+	sup := newLimitedSupervisor(t, runner, 3)
+	defer close(runner.release)
 
-	sup, _ := newSupervisor(t, &fakeRunner{}, store, &fakeLock{})
-	_, err = sup.Start(context.Background(), 1, "nova")
-	if !errors.Is(err, domain.ErrScreenBusy) {
-		t.Fatalf("tarefa bloqueada no disco devia ocupar a tela: %v", err)
+	for screen := 1; screen <= 3; screen++ {
+		if _, err := sup.Start(context.Background(), screen, fmt.Sprintf("t%d", screen)); err != nil {
+			t.Fatalf("tela %d estava dentro do teto e foi recusada: %v", screen, err)
+		}
 	}
 }
 
-// Trava tomada por OUTRO PROCESSO recusa, mesmo com disco e memória limpos.
+// Tarefa que TERMINA devolve a vaga.
 //
-// É o caso do comando de linha rodando agora: a tarefa dele pode ainda não estar
-// no disco, e a única prova de vida é a trava.
-func TestStartRefusesWhenAnotherProcessHoldsTheLock(t *testing.T) {
-	sup, _ := newSupervisor(t, &fakeRunner{}, newFakeStore(), &fakeLock{busy: true})
-	if _, err := sup.Start(context.Background(), 1, "faça algo"); !errors.Is(err, domain.ErrScreenBusy) {
-		t.Fatalf("trava de outro processo devia recusar: %v", err)
+// Sem isto o teto seria um contador que só sobe: a máquina aceitaria N tarefas
+// na vida inteira e recusaria para sempre depois.
+func TestFinishedTaskFreesTheSlot(t *testing.T) {
+	release := make(chan struct{})
+	runner := &blockingRunner{release: release}
+	sup := newLimitedSupervisor(t, runner, 1)
+
+	if _, err := sup.Start(context.Background(), 1, "primeira"); err != nil {
+		t.Fatalf("a primeira devia entrar: %v", err)
+	}
+	if _, err := sup.Start(context.Background(), 2, "segunda"); !errors.Is(err, ErrTooManyTasks) {
+		t.Fatalf("a segunda devia bater no teto: %v", err)
+	}
+
+	// Libera a primeira e espera a vaga voltar.
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	var err error
+	for time.Now().Before(deadline) {
+		runner.mu.Lock()
+		runner.release = make(chan struct{})
+		close(runner.release)
+		runner.mu.Unlock()
+		if _, err = sup.Start(context.Background(), 2, "segunda"); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("a vaga devia ter sido devolvida: %v", err)
+}
+
+// O teto global é conferido ANTES da tela ocupada.
+//
+// A ordem importa para a MENSAGEM: recusar por "tela ocupada" uma tarefa que a
+// máquina não comportaria mandaria quem chamou tentar outra tela — e a próxima
+// falharia igual, com a mensagem errada nas duas vezes.
+func TestGlobalCapIsCheckedBeforeScreenBusy(t *testing.T) {
+	runner := &blockingRunner{release: make(chan struct{})}
+	sup := newLimitedSupervisor(t, runner, 1)
+	defer close(runner.release)
+
+	if _, err := sup.Start(context.Background(), 1, "primeira"); err != nil {
+		t.Fatalf("a primeira devia entrar: %v", err)
+	}
+	// A MESMA tela, que também está ocupada: as duas recusas se aplicam, e a
+	// que precisa vencer é a do teto.
+	_, err := sup.Start(context.Background(), 1, "segunda")
+	if !errors.Is(err, ErrTooManyTasks) {
+		t.Fatalf("o teto devia vencer o conflito de tela, veio %v", err)
 	}
 }
 
-// Cancelar uma tarefa que este processo roda interrompe de verdade.
-func TestCancelStopsARunningTask(t *testing.T) {
-	runner := &fakeRunner{entered: make(chan struct{}), release: make(chan struct{})}
-	sup, _ := newSupervisor(t, runner, newFakeStore(), &fakeLock{})
+// A porta HTTP devolve 429, e não 409.
+//
+// A distinção é para quem chama: 409 se resolve retomando ou abandonando AQUELA
+// tarefa; 429 se resolve esperando. Misturar faria o cliente tentar abandonar
+// uma tarefa que não é a causa.
+func TestHTTPReturnsTooManyRequestsNotConflict(t *testing.T) {
+	runner := &blockingRunner{release: make(chan struct{})}
+	sup := newLimitedSupervisor(t, runner, 1)
+	defer close(runner.release)
 
-	task, err := sup.Start(context.Background(), 1, "faça algo")
+	server, err := NewServer(sup, nil, newFakeStore(), "segredo", quietLogger())
 	if err != nil {
-		t.Fatalf("Start falhou: %v", err)
+		t.Fatalf("montando o servidor: %v", err)
 	}
-	<-runner.entered
-	if !sup.Cancel(task.ID) {
-		t.Fatal("a tarefa é deste processo; Cancel devia devolver true")
+
+	criar := func(screen int) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"prompt":"faça algo","screen":%d}`, screen)
+		req := httptest.NewRequest(http.MethodPost, "/tasks", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer segredo")
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		return rec
 	}
-	// Tarefa que não é nossa: o abandono ainda vale pelo disco, mas não
-	// interrompe nada — e quem chama precisa saber a diferença.
-	if sup.Cancel("id-de-outro-processo") {
-		t.Fatal("tarefa desconhecida não devia reportar cancelamento")
+
+	if rec := criar(1); rec.Code != http.StatusCreated {
+		t.Fatalf("a primeira devia ser 201, veio %d: %s", rec.Code, rec.Body)
 	}
-	close(runner.release)
+	rec := criar(2)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("esperava 429, veio %d: %s", rec.Code, rec.Body)
+	}
+	// A dica precisa estar no corpo: sem ela, 429 sozinho não diz o que fazer.
+	if !strings.Contains(rec.Body.String(), "espere") {
+		t.Errorf("o corpo devia dizer o que fazer: %s", rec.Body)
+	}
+}
+
+// Teto vindo do ambiente, com queda para o padrão em valor inválido.
+func TestConcurrencyFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
+	cases := []struct {
+		value    string
+		expected int
+	}{
+		{"7", 7},
+		{"", maxConcurrentTasks},
+		{"muitas", maxConcurrentTasks},
+		{"0", maxConcurrentTasks},
+		{"-1", maxConcurrentTasks},
+	}
+	for _, c := range cases {
+		t.Setenv("AGENTD_MAX_CONCURRENT_TASKS", c.value)
+		if got := envConcurrency(); got != c.expected {
+			t.Errorf("envConcurrency() com %q = %d, esperava %d", c.value, got, c.expected)
+		}
+	}
 }
