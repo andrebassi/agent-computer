@@ -233,6 +233,61 @@ func TestValidBlockReasonCoversDocumentedSet(t *testing.T) {
 	}
 }
 
+// O motivo `guardrail` é válido, tem descrição própria, e ela NÃO se confunde
+// com a dos cinco documentados.
+//
+// A distinção é o ponto: os cinco descrevem o que o SITE exige; este é nós
+// parando o agente. Reaproveitar a descrição de `human_required` faria a tela
+// dizer "o site exige uma pessoa" quando o site não exigiu nada — mentira sobre
+// a causa, na hora em que alguém precisa entender por que a tarefa parou.
+func TestGuardrailReasonIsValidAndDistinct(t *testing.T) {
+	if !ValidBlockReason(BlockGuardrail) {
+		t.Fatal("o motivo guardrail devia ser válido")
+	}
+	descricao := BlockGuardrail.Description()
+	if descricao == "" || descricao == "motivo desconhecido" {
+		t.Fatalf("guardrail sem descrição útil: %q", descricao)
+	}
+	for _, documentado := range []BlockReason{
+		BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired,
+	} {
+		if documentado.Description() == descricao {
+			t.Fatalf("guardrail não pode compartilhar a descrição de %q", documentado)
+		}
+	}
+}
+
+// Uma tarefa bloqueada por guardrail continua RETOMÁVEL.
+//
+// É o que separa este bloqueio de uma falha: o trabalho e o histórico ficam, e
+// a pessoa decide se retoma. Se o guardrail encerrasse a tarefa, parar cedo
+// custaria tudo o que já tinha sido feito.
+func TestGuardrailBlockIsResumable(t *testing.T) {
+	agora := time.Now()
+	task, err := NewTask("t-guard", 1, "faça algo", agora)
+	if err != nil {
+		t.Fatalf("criação: %v", err)
+	}
+	if err := task.Start(agora); err != nil {
+		t.Fatalf("início: %v", err)
+	}
+	if err := task.Block(BlockGuardrail, "teto de turnos atingido", agora); err != nil {
+		t.Fatalf("bloqueio por guardrail devia ser aceito: %v", err)
+	}
+	if !task.Active() {
+		t.Error("tarefa bloqueada continua ocupando a tela")
+	}
+	if err := task.Resume(agora); err != nil {
+		t.Fatalf("devia ser retomável: %v", err)
+	}
+	if task.State != StateRunning {
+		t.Fatalf("depois de retomar devia estar running, veio %s", task.State)
+	}
+	if task.BlockReason != "" {
+		t.Errorf("o motivo devia ser limpo na retomada, ficou %q", task.BlockReason)
+	}
+}
+
 // A tela precisa mostrar algo em TODO estado. Um estado sem texto viraria uma
 // faixa em branco, indistinguível de overlay quebrado.
 func TestStatusLineForEveryState(t *testing.T) {

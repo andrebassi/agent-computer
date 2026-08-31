@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/connectors"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/journal"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/runners"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
@@ -27,6 +30,12 @@ import (
 //
 // O que varia por tarefa — o conjunto de ferramentas — fica na fábrica, porque
 // depende do texto do pedido.
+// maxGuardrailsBytes é o teto do arquivo de lições, em bytes.
+//
+// O arquivo entra no prompt de sistema de toda tarefa. 4 KB cabe algumas dezenas
+// de lições e custa pouco perto do histórico, que vai a centenas de KB.
+const maxGuardrailsBytes = 4096
+
 type deps struct {
 	model    ports.LanguageModel
 	store    *store.FileStore
@@ -37,6 +46,14 @@ type deps struct {
 	sink     ports.EventSink
 	stateDir string
 	verbose  bool
+	// journal escreve os quatro arquivos de memória e devolve as lições que
+	// entram no prompt.
+	journal *journal.Journal
+	// runners é o catálogo fechado de agentes de código para a delegação.
+	runners *runners.Catalog
+	// taskBudget é quanto tempo uma tarefa tem, para o detector de tempo de
+	// parede saber a FRAÇÃO consumida. Zero desliga o detector.
+	taskBudget time.Duration
 }
 
 // buildDeps monta o que não depende do texto da tarefa.
@@ -47,6 +64,21 @@ type deps struct {
 // exigi-la justamente quando algo deu errado.
 func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, error) {
 	d := &deps{stateDir: stateDir, verbose: verbose}
+
+	// O diário e o catálogo são montados SEMPRE, inclusive nas operações locais:
+	// nenhum dos dois precisa da chave do modelo, e um `-catalog` que não
+	// registrasse atividade deixaria buraco no histórico da máquina.
+	d.journal = journal.New(stateDir, time.Now, maxGuardrailsBytes)
+
+	catalog, catalogErr := runners.Load(filepath.Join(stateDir, "runners.json"))
+	if catalogErr != nil {
+		// Catálogo quebrado não derruba o processo: sem ele a delegação usa o
+		// padrão, que é o comportamento de antes de o catálogo existir. Derrubar
+		// aqui tiraria do ar um agente inteiro por causa de uma vírgula.
+		fmt.Fprintf(os.Stderr, "aviso: catálogo de runners ignorado: %v\n", catalogErr)
+		catalog, _ = runners.Parse([]byte("{}"))
+	}
+	d.runners = catalog
 
 	if needsModel {
 		// A chave vem do COFRE e, na falta dele, do ambiente. Nunca de
@@ -128,7 +160,7 @@ func (d *deps) agentFactory() api.AgentFactory {
 		// Delegação a um agente de código. Os dois não se substituem: este
 		// navega, chama API e sabe parar numa barreira sensível; o outro edita
 		// arquivo e mexe em git.
-		toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", d.stateDir+"/anthropic.env", toolSandbox()))
+		toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", d.stateDir+"/anthropic.env", toolSandbox(), tools.WithRunners(d.runners)))
 
 		// Conectores e habilidades dependem do TEXTO — é por isso que a
 		// montagem é por tarefa, e não uma vez no boot. Um agente montado no
@@ -162,7 +194,10 @@ func (d *deps) agentFactory() api.AgentFactory {
 		finalPrompt := request.Prompt + expanded
 
 		agent := service.NewAgent(d.model, toolset, d.screen, d.store, d.lock,
-			time.Now, agentInstructions, service.WithEventSink(d.sink))
+			time.Now, agentInstructions,
+			service.WithEventSink(d.sink),
+			service.WithGuardrailJournal(d.journal),
+			service.WithTaskBudget(d.taskBudget))
 		return agent, finalPrompt, nil
 	}
 }

@@ -1,0 +1,549 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/andrebassi/agent-computer/agent/internal/domain"
+	"github.com/andrebassi/agent-computer/agent/internal/ports"
+)
+
+// recordingJournal captura o que o laço grava, para o teste asseverar sobre o
+// conteúdo em vez de sobre o disco.
+type recordingJournal struct {
+	mu       sync.Mutex
+	lessons  []string
+	errs     []string
+	activity []string
+	progress []string
+	// failLesson força erro na gravação da lição, para exercitar o caminho em
+	// que aprender falha e o bloqueio precisa sobreviver.
+	failLesson bool
+}
+
+// LearnLesson guarda a lição, ou falha quando o dublê foi configurado para isso.
+func (r *recordingJournal) LearnLesson(_ context.Context, kind GuardrailKind, lesson string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failLesson {
+		return errors.New("disco cheio")
+	}
+	r.lessons = append(r.lessons, string(kind)+": "+lesson)
+	return nil
+}
+
+// RecordError guarda a linha de erro.
+func (r *recordingJournal) RecordError(_ context.Context, line string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errs = append(r.errs, line)
+	return nil
+}
+
+// RecordActivity guarda a linha de atividade.
+func (r *recordingJournal) RecordActivity(_ context.Context, line string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.activity = append(r.activity, line)
+	return nil
+}
+
+// RecordProgress guarda a linha de progresso.
+func (r *recordingJournal) RecordProgress(_ context.Context, line string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.progress = append(r.progress, line)
+	return nil
+}
+
+// Lessons devolve as lições gravadas, no formato em que elas entram no prompt.
+func (r *recordingJournal) Lessons() (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.lessons, "\n"), nil
+}
+
+// joined devolve tudo o que foi gravado, para busca por substring.
+func (r *recordingJournal) joined() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(append(append(append([]string{}, r.lessons...), r.errs...), r.activity...), "\n")
+}
+
+// --- detector 1: teto acumulado de turnos ---------------------------------
+
+// Abaixo do teto, o detector NÃO dispara.
+//
+// É a metade que impede o guardrail de virar obstáculo: uma verificação que
+// reprova qualquer entrada é "segura" e inútil, e a primeira coisa que alguém
+// faz é desligá-la.
+func TestTurnCapStaysQuietBelowLimit(t *testing.T) {
+	task := &domain.Task{TurnsUsed: maxTurnsPerTask - 1}
+	if hit := checkTurnCap(task); hit != nil {
+		t.Fatalf("não devia disparar com %d turnos: %v", task.TurnsUsed, hit.Detail)
+	}
+}
+
+// No teto, dispara e o detalhe traz os dois números.
+//
+// Sem o número usado E o teto, a pessoa que lê a tela não sabe se faltou pouco
+// ou se a tarefa estava girando havia horas.
+func TestTurnCapFiresAtLimitWithBothNumbers(t *testing.T) {
+	task := &domain.Task{TurnsUsed: maxTurnsPerTask}
+	hit := checkTurnCap(task)
+	if hit == nil {
+		t.Fatal("devia disparar no teto")
+	}
+	if hit.Kind != GuardrailTurnCap {
+		t.Fatalf("tipo errado: %s", hit.Kind)
+	}
+	for _, esperado := range []string{"180", "teto"} {
+		if !strings.Contains(hit.Detail, esperado) {
+			t.Errorf("o detalhe devia citar %q: %s", esperado, hit.Detail)
+		}
+	}
+}
+
+// --- detector 2: ferramenta em laço ---------------------------------------
+
+// Duas falhas idênticas ainda não são laço; a terceira é.
+//
+// O limiar em três é deliberado: a segunda tentativa é comportamento legítimo —
+// o modelo corrige o caminho e acerta. Este teste fixa a fronteira, para que
+// mexer no número quebre algo visível.
+func TestToolLoopFiresOnlyOnThirdIdenticalFailure(t *testing.T) {
+	guard := newGuardrailState(time.Now(), 0)
+	for tentativa := 1; tentativa <= 2; tentativa++ {
+		repeats := guard.observeToolFailure("shell", `{"command":"ls /naoexiste"}`)
+		if hit := checkToolLoop("shell", "args", "erro", repeats); hit != nil {
+			t.Fatalf("disparou cedo demais, na tentativa %d", tentativa)
+		}
+	}
+	repeats := guard.observeToolFailure("shell", `{"command":"ls /naoexiste"}`)
+	hit := checkToolLoop("shell", "args", "No such file or directory", repeats)
+	if hit == nil {
+		t.Fatal("a terceira falha idêntica devia disparar")
+	}
+	if !strings.Contains(hit.Detail, "No such file or directory") {
+		t.Errorf("o erro literal devia estar no detalhe: %s", hit.Detail)
+	}
+	if !strings.Contains(hit.Lesson, "shell") {
+		t.Errorf("a lição devia nomear a ferramenta: %s", hit.Lesson)
+	}
+}
+
+// Sucesso no meio ZERA a contagem.
+//
+// É o que separa "insiste no mesmo erro" de "erra enquanto explora". Sem isto,
+// uma tarefa longa e legítima acumularia falhas esparsas até bloquear sozinha.
+func TestToolLoopResetsAfterSuccess(t *testing.T) {
+	guard := newGuardrailState(time.Now(), 0)
+	guard.observeToolFailure("shell", "mesmo")
+	guard.observeToolFailure("shell", "mesmo")
+	guard.observeToolSuccess()
+	if repeats := guard.observeToolFailure("shell", "mesmo"); repeats != 1 {
+		t.Fatalf("o sucesso devia zerar a contagem, veio %d", repeats)
+	}
+}
+
+// Falha DIFERENTE também zera — argumentos distintos não são o mesmo laço.
+func TestToolLoopResetsWhenArgumentsChange(t *testing.T) {
+	guard := newGuardrailState(time.Now(), 0)
+	guard.observeToolFailure("shell", `{"command":"a"}`)
+	guard.observeToolFailure("shell", `{"command":"a"}`)
+	if repeats := guard.observeToolFailure("shell", `{"command":"b"}`); repeats != 1 {
+		t.Fatalf("argumento diferente devia zerar, veio %d", repeats)
+	}
+}
+
+// A MESMA ferramenta com argumentos diferentes tem chaves diferentes.
+func TestFailureKeySeparatesArguments(t *testing.T) {
+	if failureKey("shell", "a") == failureKey("shell", "b") {
+		t.Fatal("argumentos diferentes deviam produzir chaves diferentes")
+	}
+	if failureKey("shell", "a") != failureKey("shell", "a") {
+		t.Fatal("a mesma entrada devia produzir a mesma chave")
+	}
+}
+
+// --- detector 3: tempo de parede ------------------------------------------
+
+// Sem orçamento, o detector fica calado.
+//
+// É o caso do CLI, que não tem teto de tempo. Inventar um aqui mudaria o
+// comportamento de um caminho que ninguém pediu para mudar.
+func TestWallClockIsDisabledWithoutBudget(t *testing.T) {
+	guard := newGuardrailState(time.Now(), 0)
+	if hit := guard.checkWallClock(time.Now().Add(100 * time.Hour)); hit != nil {
+		t.Fatalf("sem orçamento não devia disparar: %v", hit.Detail)
+	}
+}
+
+// Antes da fração, calado; depois dela, dispara.
+func TestWallClockFiresOnlyAfterFraction(t *testing.T) {
+	inicio := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	guard := newGuardrailState(inicio, 100*time.Minute)
+
+	if hit := guard.checkWallClock(inicio.Add(79 * time.Minute)); hit != nil {
+		t.Fatalf("79%% do orçamento não devia disparar: %v", hit.Detail)
+	}
+	hit := guard.checkWallClock(inicio.Add(81 * time.Minute))
+	if hit == nil {
+		t.Fatal("81%% do orçamento devia disparar")
+	}
+	if hit.Kind != GuardrailWallClock {
+		t.Fatalf("tipo errado: %s", hit.Kind)
+	}
+}
+
+// --- resposta truncada -----------------------------------------------------
+
+// Os rótulos de truncamento dos fornecedores são reconhecidos; "stop" não é.
+//
+// O caso que motiva: uma resposta cortada por limite de saída chega SEM chamada
+// de ferramenta, e o laço tratava isso como conclusão. A tarefa terminava
+// `done`, com a resposta pela metade e ninguém sabendo.
+func TestTruncatedStopRecognizesProviderLabels(t *testing.T) {
+	casos := map[string]bool{
+		"length":            true,
+		"max_tokens":        true,
+		"MAX_OUTPUT_TOKENS": true,
+		"  length  ":        true,
+		"stop":              false,
+		"tool_calls":        false,
+		"":                  false,
+	}
+	for reason, esperado := range casos {
+		if got := truncatedStop(reason); got != esperado {
+			t.Errorf("truncatedStop(%q) = %v, esperava %v", reason, got, esperado)
+		}
+	}
+}
+
+// --- integração no laço ----------------------------------------------------
+
+// O laço BLOQUEIA quando a mesma ferramenta falha três vezes, e a tarefa fica
+// recuperável.
+//
+// Este é o teste que prova o caminho inteiro: `ToolResult.Failed` lido, contagem
+// acumulada, bloqueio pela mesma máquina do take-over, e lição gravada.
+func TestLoopBlocksOnRepeatedToolFailure(t *testing.T) {
+	journal := &recordingJournal{}
+	falha := &fakeTool{
+		name:   "shell",
+		result: ports.ToolResult{Output: "ls: No such file or directory", Failed: true},
+	}
+	// O modelo insiste na MESMA chamada — o roteiro repete o suficiente para o
+	// detector ter chance de disparar antes de o roteiro acabar.
+	insistente := repeatedCall("shell", `{"command":"ls /naoexiste"}`, maxIdenticalToolFailures+2)
+	agent, task := newGuardrailAgent(t, &fakeModel{responses: insistente}, falha, journal)
+	err := agent.Run(context.Background(), task)
+	if err != nil {
+		t.Fatalf("o bloqueio não devia devolver erro: %v", err)
+	}
+	if task.State != domain.StateBlocked {
+		t.Fatalf("estado devia ser blocked, veio %s", task.State)
+	}
+	if task.BlockReason != domain.BlockGuardrail {
+		t.Fatalf("motivo devia ser guardrail, veio %s", task.BlockReason)
+	}
+	if !strings.Contains(task.BlockDetail, "No such file or directory") {
+		t.Errorf("o detalhe devia trazer o erro literal: %s", task.BlockDetail)
+	}
+	// Exatamente três chamadas de ferramenta: a quarta seria desperdício.
+	if falha.calls != maxIdenticalToolFailures {
+		t.Errorf("esperava %d execuções, houve %d", maxIdenticalToolFailures, falha.calls)
+	}
+	if !strings.Contains(journal.joined(), "shell") {
+		t.Error("o diário devia registrar a ferramenta que falhou")
+	}
+}
+
+// Ferramenta que FUNCIONA não dispara detector nenhum — o outro sentido.
+//
+// Sem este caso, um detector quebrado que bloqueasse tudo passaria em todos os
+// testes acima.
+func TestLoopDoesNotBlockOnHealthyRun(t *testing.T) {
+	journal := &recordingJournal{}
+	ok := &fakeTool{name: "shell", result: ports.ToolResult{Output: "arquivo1 arquivo2"}}
+	model := &fakeModel{responses: []ports.Completion{
+		{ToolCalls: []domain.ToolCall{{ID: "1", Name: "shell", Arguments: `{"command":"ls"}`}}},
+		{Content: "encontrei dois arquivos", StopReason: "stop"},
+	}}
+	agent, task := newGuardrailAgent(t, model, ok, journal)
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução saudável não devia falhar: %v", err)
+	}
+	if task.State != domain.StateDone {
+		t.Fatalf("estado devia ser done, veio %s", task.State)
+	}
+	if len(journal.lessons) != 0 {
+		t.Errorf("execução saudável não devia gerar lição: %v", journal.lessons)
+	}
+}
+
+// Resposta truncada vira BLOQUEIO, não conclusão.
+func TestLoopBlocksOnTruncatedResponse(t *testing.T) {
+	journal := &recordingJournal{}
+	model := &fakeModel{responses: []ports.Completion{
+		{Content: "estava explicando quando fui cort", StopReason: "length"},
+	}}
+	agent, task := newGuardrailAgent(t, model, nil, journal)
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("não devia devolver erro: %v", err)
+	}
+	if task.State != domain.StateBlocked {
+		t.Fatalf("truncamento devia bloquear, veio %s", task.State)
+	}
+	if !strings.Contains(task.BlockDetail, "cortada") {
+		t.Errorf("o detalhe devia explicar o corte: %s", task.BlockDetail)
+	}
+}
+
+// O contador de turnos SOBREVIVE e é persistido.
+//
+// É o buraco que o campo no domínio fecha: antes, o contador nascia em zero a
+// cada invocação, e uma tarefa que alternasse bloqueio e retomada ganhava 60
+// turnos novos a cada volta.
+func TestTurnsAreCountedOnTheTask(t *testing.T) {
+	journal := &recordingJournal{}
+	ok := &fakeTool{name: "shell", result: ports.ToolResult{Output: "ok"}}
+	model := &fakeModel{responses: []ports.Completion{
+		{ToolCalls: []domain.ToolCall{{ID: "1", Name: "shell", Arguments: "{}"}}},
+		{ToolCalls: []domain.ToolCall{{ID: "2", Name: "shell", Arguments: "{}"}}},
+		{Content: "pronto", StopReason: "stop"},
+	}}
+	agent, task := newGuardrailAgent(t, model, ok, journal)
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução falhou: %v", err)
+	}
+	if task.TurnsUsed != 3 {
+		t.Fatalf("esperava 3 turnos contados, veio %d", task.TurnsUsed)
+	}
+}
+
+// Falha ao gravar a lição NÃO desfaz o bloqueio.
+//
+// A contenção já aconteceu; perder a lição é menos grave que perder a parada.
+func TestBlockSurvivesJournalFailure(t *testing.T) {
+	journal := &recordingJournal{failLesson: true}
+	falha := &fakeTool{name: "shell", result: ports.ToolResult{Output: "erro", Failed: true}}
+	insistente := repeatedCall("shell", "{}", maxIdenticalToolFailures+2)
+	agent, task := newGuardrailAgent(t, &fakeModel{responses: insistente}, falha, journal)
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("não devia devolver erro: %v", err)
+	}
+	if task.State != domain.StateBlocked {
+		t.Fatalf("o bloqueio devia acontecer mesmo sem conseguir aprender, veio %s", task.State)
+	}
+}
+
+// repeatedCall monta um roteiro em que o modelo pede a MESMA coisa n vezes.
+//
+// O roteiro é maior que o limiar de propósito: se o detector não disparar, o
+// teste falha por estado errado em vez de por roteiro curto — a diferença entre
+// "o guardrail não funcionou" e "o dublê acabou".
+func repeatedCall(tool, arguments string, n int) []ports.Completion {
+	out := make([]ports.Completion, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, ports.Completion{
+			ToolCalls: []domain.ToolCall{{ID: "c", Name: tool, Arguments: arguments}},
+		})
+	}
+	return out
+}
+
+// newGuardrailAgent monta o agente com o diário sob observação.
+//
+// Devolve a tarefa junto porque todo caso deste arquivo asseveram sobre o
+// ESTADO dela — bloqueada, concluída, contagem de turnos.
+func newGuardrailAgent(t *testing.T, model ports.LanguageModel, tool ports.Tool, journal GuardrailJournal) (*Agent, *domain.Task) {
+	t.Helper()
+	tools := []ports.Tool{}
+	if tool != nil {
+		tools = append(tools, tool)
+	}
+	agent := NewAgent(model, tools, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções", WithGuardrailJournal(journal))
+	task, err := domain.NewTask("guardrail-1", 1, "faça algo", fixedClock())
+	if err != nil {
+		t.Fatalf("criação da tarefa falhou: %v", err)
+	}
+	return agent, task
+}
+
+// A lição aprendida CHEGA ao prompt de sistema da próxima tarefa.
+//
+// É o teste que separa este trabalho do ralph, e o único que prova o ciclo
+// inteiro: detector dispara, lição é gravada, e a tarefa seguinte a recebe sem
+// depender de o modelo resolver ler um arquivo.
+func TestLessonReachesTheNextTaskPrompt(t *testing.T) {
+	journal := &recordingJournal{}
+	// Primeira tarefa: a ferramenta falha em laço e o detector aprende.
+	falha := &fakeTool{name: "shell", result: ports.ToolResult{Output: "connection refused", Failed: true}}
+	primeiro, tarefa1 := newGuardrailAgent(t, &fakeModel{
+		responses: repeatedCall("shell", `{"command":"curl interno"}`, maxIdenticalToolFailures+2),
+	}, falha, journal)
+	if err := primeiro.Run(context.Background(), tarefa1); err != nil {
+		t.Fatalf("primeira tarefa: %v", err)
+	}
+	if len(journal.lessons) == 0 {
+		t.Fatal("a primeira tarefa devia ter deixado uma lição")
+	}
+
+	// Segunda tarefa: um modelo que só registra o que recebeu.
+	espiao := &promptSpy{}
+	segundo := NewAgent(espiao, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções", WithGuardrailJournal(journal))
+	tarefa2, err := domain.NewTask("guardrail-2", 1, "outra coisa", fixedClock())
+	if err != nil {
+		t.Fatalf("criando a segunda tarefa: %v", err)
+	}
+	if err := segundo.Run(context.Background(), tarefa2); err != nil {
+		t.Fatalf("segunda tarefa: %v", err)
+	}
+
+	if !strings.Contains(espiao.systemSeen, "connection refused") {
+		t.Fatalf("a lição devia estar no prompt de sistema da tarefa seguinte:\n%s", espiao.systemSeen)
+	}
+	if !strings.Contains(espiao.systemSeen, "instruções") {
+		t.Error("a instrução original devia continuar presente")
+	}
+}
+
+// Sem lição nenhuma, o prompt de sistema fica EXATAMENTE como era.
+//
+// Sem este caso, um bug que anexasse um bloco vazio passaria — e um bloco vazio
+// no prefixo invalida o cache de prompt do fornecedor a cada tarefa.
+func TestSystemPromptIsUntouchedWithoutLessons(t *testing.T) {
+	espiao := &promptSpy{}
+	agent := NewAgent(espiao, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções", WithGuardrailJournal(&recordingJournal{}))
+	task, _ := domain.NewTask("t", 1, "faça", fixedClock())
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if espiao.systemSeen != "instruções" {
+		t.Fatalf("o prompt devia ficar intacto, veio %q", espiao.systemSeen)
+	}
+}
+
+// promptSpy guarda a instrução de sistema que chegou ao modelo.
+type promptSpy struct {
+	systemSeen string
+}
+
+// Complete registra o prompt de sistema e encerra a tarefa sem pedir ferramenta.
+func (p *promptSpy) Complete(_ context.Context, messages []domain.Message, _ []ports.ToolSpec) (*ports.Completion, error) {
+	for _, m := range messages {
+		if m.Role == domain.RoleSystem {
+			p.systemSeen = m.Content
+			break
+		}
+	}
+	return &ports.Completion{Content: "pronto", StopReason: "stop"}, nil
+}
+
+// Erro MUITO longo é cortado antes de virar detalhe de bloqueio.
+//
+// A saída de uma ferramenta pode ter quilobytes; o detalhe vai para a tela e
+// para o aviso, e um texto assim ali é ilegível — quem precisa agir não acha a
+// informação no meio do despejo.
+func TestToolLoopTruncatesHugeError(t *testing.T) {
+	hit := checkToolLoop("shell", "args", strings.Repeat("x", 4000), maxIdenticalToolFailures)
+	if hit == nil {
+		t.Fatal("devia disparar")
+	}
+	if len(hit.Detail) > 500 {
+		t.Fatalf("o detalhe devia ser cortado, veio com %d bytes", len(hit.Detail))
+	}
+	if !strings.Contains(hit.Detail, "…") {
+		t.Error("o corte devia ser sinalizado")
+	}
+}
+
+// Ferramenta DESCONHECIDA não entra na contagem de laço.
+//
+// Nome inventado pelo modelo já é respondido no histórico; contá-lo como falha
+// de execução misturaria dois defeitos diferentes na mesma métrica, e três
+// nomes errados seguidos bloqueariam uma tarefa que só precisava de correção.
+func TestUnknownToolIsNotCountedAsFailure(t *testing.T) {
+	agent := NewAgent(&fakeModel{}, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "i", WithGuardrailJournal(&recordingJournal{}))
+	guard := newGuardrailState(fixedClock(), 0)
+
+	for i := 0; i < 5; i++ {
+		out := toolOutcome{call: domain.ToolCall{Name: "inexistente"}, known: false}
+		if hit := agent.observeOutcome(context.Background(), guard, out); hit != nil {
+			t.Fatalf("ferramenta desconhecida não devia disparar (rodada %d)", i)
+		}
+	}
+}
+
+// Erro de EXECUÇÃO (err != nil) conta como falha, igual a `Failed: true`.
+//
+// Os dois caminhos existem no laço e significam a mesma coisa para o detector:
+// a chamada não deu certo. Contar só um deixaria metade do laço invisível.
+func TestExecutionErrorCountsAsFailure(t *testing.T) {
+	if !guardrailToolResultFailed(nil, errors.New("processo morreu")) {
+		t.Error("erro de execução devia contar como falha")
+	}
+	if !guardrailToolResultFailed(&ports.ToolResult{Failed: true}, nil) {
+		t.Error("Failed:true devia contar como falha")
+	}
+	if guardrailToolResultFailed(&ports.ToolResult{Output: "ok"}, nil) {
+		t.Error("resultado bom não é falha")
+	}
+	if guardrailToolResultFailed(nil, nil) {
+		t.Error("resultado nulo sem erro não devia contar")
+	}
+}
+
+// Bloquear uma tarefa que já saiu de `running` devolve erro em vez de silêncio.
+//
+// O detector pode chegar tarde — outra ferramenta do mesmo turno já pediu
+// take-over. Engolir isso esconderia um defeito de ordenação no laço.
+func TestApplyHitOnNonRunningTaskReturnsError(t *testing.T) {
+	agent := NewAgent(&fakeModel{}, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "i", WithGuardrailJournal(&recordingJournal{}))
+	task := &domain.Task{ID: "t", Screen: 1, State: domain.StateDone}
+	conv := domain.NewConversation("t", "i")
+
+	err := agent.applyHit(context.Background(), task, conv,
+		&GuardrailHit{Kind: GuardrailTurnCap, Detail: "teto"})
+	if err == nil {
+		t.Fatal("bloquear tarefa concluída devia falhar")
+	}
+	if !strings.Contains(err.Error(), string(GuardrailTurnCap)) {
+		t.Errorf("o erro devia nomear o detector: %v", err)
+	}
+}
+
+// A variável de ambiente ajusta o limiar, e valor inválido cai no padrão.
+//
+// O segundo caso é o que importa: um teto malformado não pode derrubar o
+// agente nem, pior, desligar o detector — cair no padrão é o comportamento
+// seguro.
+func TestThresholdFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
+	casos := []struct {
+		valor    string
+		esperado int
+	}{
+		{"5", 5},
+		{"", 42},
+		{"zero", 42},
+		{"-3", 42},
+		{"0", 42},
+		{"  7  ", 7},
+	}
+	for _, caso := range casos {
+		t.Setenv("AGENTD_TESTE_LIMIAR", caso.valor)
+		if got := envInt("AGENTD_TESTE_LIMIAR", 42); got != caso.esperado {
+			t.Errorf("envInt(%q) = %d, esperava %d", caso.valor, got, caso.esperado)
+		}
+	}
+}

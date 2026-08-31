@@ -415,6 +415,48 @@ in
       # tomam. Arquivo criado por uma versao anterior chega aqui com 0644.
       chmod g+w ${workspace}/agent/locks/*.lock 2>/dev/null || true
       chmod 2770 ${workspace}/agent/screens
+
+      # Os quatro arquivos de memoria (guardrails, progresso, atividade, erros)
+      # e o catalogo de runners.
+      #
+      # 0640 do agentd: o grupo `agent` LE, para o operador conferir sem virar
+      # root, e NAO escreve. A distincao e a contencao inteira -- `guardrails.md`
+      # entra no prompt de sistema de toda tarefa, e quem escreve o proprio
+      # prompt de contencao nao esta contido. Mesma razao de `skills/`.
+      #
+      # Criados vazios aqui em vez de por `systemd.tmpfiles.rules`: as regras
+      # sob /workspace/agent sao recusadas com "unsafe path transition" e
+      # descartadas em silencio (ver o comentario la em cima).
+      for arquivo in guardrails.md progress.md activity.log errors.log runners.json; do
+        caminho="${workspace}/agent/$arquivo"
+        [ -e "$caminho" ] || : > "$caminho"
+        chown agentd:agent "$caminho"
+        chmod 0640 "$caminho"
+      done
+
+      # O catalogo nasce com os cinco runners cadastrados.
+      #
+      # So o `claude` esta instalado hoje; os outros ficam cadastrados de
+      # proposito, e pedir um deles falha dizendo qual binario falta. E melhor
+      # que omiti-los: a mensagem vira a documentacao de como instalar.
+      if [ ! -s "${workspace}/agent/runners.json" ]; then
+        cat > "${workspace}/agent/runners.json" <<'CATALOGO'
+{
+  "claude": {"cmd": ["claude", "-p", "--dangerously-skip-permissions", "{prompt}"],
+             "description": "Claude Code (instalado)"},
+  "codex":  {"cmd": ["codex", "exec", "--yolo", "--skip-git-repo-check", "-"],
+             "stdin": true, "description": "OpenAI Codex"},
+  "droid":  {"cmd": ["droid", "exec", "--skip-permissions-unsafe", "-f", "{prompt}"],
+             "description": "Factory Droid"},
+  "opencode": {"cmd": ["opencode", "run", "{prompt}"],
+             "description": "OpenCode"},
+  "kiro":   {"cmd": ["kiro", "exec", "{prompt}"],
+             "description": "Kiro"}
+}
+CATALOGO
+        chown agentd:agent "${workspace}/agent/runners.json"
+        chmod 0640 "${workspace}/agent/runners.json"
+      fi
       true
     '';
   };

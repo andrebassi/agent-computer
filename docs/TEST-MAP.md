@@ -67,6 +67,13 @@ domínio e os adapters com dublê. **Não** cobrem fiação, permissão nem cami
 | estado sobrevive a restart | `32-end-to-end` | 8 |
 | **contrato igual nos dois caminhos de deploy** | `32-end-to-end` | 12 |
 | **conector não alcança a rede interna, nem por nome** | `35-connector-ssrf-test` | 2, 3 |
+| **detector de laço bloqueia a tarefa de verdade** | `36-guardrails-test` | 8b |
+| **a lição gravada chega ao prompt da tarefa seguinte** | `36-guardrails-test` | 6 |
+| o modelo não escreve os arquivos de memória | `36-guardrails-test` | 2 |
+| catálogo de runners sem shell, com os 5 cadastrados | `36-guardrails-test` | 3 |
+| runner fora do catálogo é recusado com a lista | `36-guardrails-test` | 4 |
+| **tarefa normal não dispara detector nenhum** | `36-guardrails-test` | 8 |
+| turnos acumulados persistidos na tarefa | `36-guardrails-test` | 10 |
 | o metadata da nuvem existe (senão o teste não prova nada) | `35-connector-ssrf-test` | 1 |
 | **conector legítimo continua alcançando fora** | `35-connector-ssrf-test` | 4 |
 
@@ -202,6 +209,24 @@ Provado: `screen-add 2` → 5 unidades ativas → `reboot` → voltaram sozinhas
 `agent` para `agentd` no meio do caminho) e descartadas em silêncio, sem falhar
 a unidade. Quem cria e ajusta esses diretórios é o oneshot
 `agent-state-ownership`.
+
+## Guardrails do laço
+
+Camada nova, documentada em [`GUARDRAILS.md`](GUARDRAILS.md). O que ela fechou:
+
+| Contenção | Antes |
+|---|---|
+| detecção de laço de ferramenta | inexistente — `ToolResult.Failed` era escrito por toda ferramenta e **lido por ninguém** |
+| teto de turnos por TAREFA | o contador zerava a cada `Resume`; retomada era ilimitada |
+| resposta truncada | `finish_reason: "length"` virava `done` **com sucesso** |
+| `Resume` com tela ocupada | tarefa `blocked` virava `failed`, perdendo trabalho e pedido de ajuda |
+| observabilidade do laço | `service.Agent` não tinha logger nenhum |
+| memória entre tarefas | inexistente |
+
+A regra que ela segue, e que o ralph não segue: **detectar é código, conter é
+mudança de estado, e o serviço LÊ o que escreveu.** No ralph o prompt recebe o
+caminho do arquivo de lições e um pedido para o modelo lê-lo — nenhuma linha de
+código lê o conteúdo, embora a documentação afirme o contrário.
 
 ## O que NÃO tem cobertura, e é honesto dizer
 

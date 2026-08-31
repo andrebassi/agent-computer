@@ -44,6 +44,13 @@ func serve(ctx context.Context, d *deps, listenAddr, tokenFile string, taskTimeo
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	logger.Info("token da porta HTTP carregado", "origem", tokenSource)
+
+	// O detector de tempo de parede precisa saber quanto tempo a tarefa TEM,
+	// não quando ela acaba: `context.Deadline` daria o instante final, e a
+	// fração consumida exige o total. Quem sabe disso é este caminho, porque é
+	// aqui que o teto entra — pelo CLI ele não existe, e lá o detector fica
+	// desligado de propósito.
+	d.taskBudget = taskTimeout
 	// A fila entra aqui: tarefa reconciliada no boot AVISA. Sem isto, a que
 	// morreu por `kill -9` virava `failed` em silêncio, e quem a disparou não
 	// tinha como saber que o processo caiu.

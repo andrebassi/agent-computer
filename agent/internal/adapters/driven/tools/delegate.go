@@ -59,6 +59,9 @@ type Delegate struct {
 	// Sem rebaixamento ele roda como o usuário do serviço — o dono da identidade
 	// age — e uma delegação bastaria para ler o arquivo de senha do cofre.
 	sandbox *Sandbox
+	// runners é o catálogo de agentes de código alternativos. Nil significa
+	// "só o padrão", que é o estado de uma máquina sem o arquivo de catálogo.
+	runners RunnerResolver
 	// envFile guarda a credencial dele. Fica em arquivo, e não no ambiente deste
 	// processo, para a chave não vazar por `ps` nem por dump de memória de um
 	// processo de vida longa.
@@ -91,6 +94,12 @@ const maxDelegateCostUSD = "5.00"
 // delegateArgs é o formato que o modelo preenche.
 type delegateArgs struct {
 	Task string `json:"task"`
+	// Runner escolhe o agente de código, dentro do catálogo cadastrado.
+	//
+	// Vazio mantém o padrão — é o que faz esta mudança não alterar nada do que
+	// já estava testado. Um nome fora do catálogo é RECUSADO com a lista do que
+	// existe; o modelo nunca monta o comando, só escolhe entre nomes.
+	Runner string `json:"runner"`
 }
 
 // delegateEvent é o que `--output-format json` devolve: uma lista de eventos,
@@ -123,19 +132,30 @@ func NewDelegate(workdir, envFile string) *Delegate {
 // É o construtor de produção. O usuário informado NÃO pode ser o mesmo que roda
 // o agentd — se for, o rebaixamento é nominal e o cofre segue alcançável por
 // uma delegação.
-func NewDelegateSandboxed(workdir, envFile string, sandbox *Sandbox) *Delegate {
-	return newDelegate(workdir, envFile, sandbox)
+func NewDelegateSandboxed(workdir, envFile string, sandbox *Sandbox, opts ...DelegateOption) *Delegate {
+	return newDelegate(workdir, envFile, sandbox, opts...)
 }
 
+// DelegateOption configura a delegação sem mudar a assinatura dos construtores.
+//
+// Mesmo padrão do agente: acrescentar dependência opcional sem obrigar a editar
+// todas as chamadas — e cada edição dessas é uma chance de trocar dois
+// argumentos do mesmo tipo sem o compilador notar.
+type DelegateOption func(*Delegate)
+
 // newDelegate concentra a montagem, para os dois construtores não divergirem.
-func newDelegate(workdir, envFile string, sandbox *Sandbox) *Delegate {
-	return &Delegate{
+func newDelegate(workdir, envFile string, sandbox *Sandbox, opts ...DelegateOption) *Delegate {
+	d := &Delegate{
 		workdir:   workdir,
 		envFile:   envFile,
 		configDir: filepath.Join(filepath.Dir(envFile), "claude-config"),
 		binary:    "claude",
 		sandbox:   sandbox,
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // Spec descreve a ferramenta para o modelo.
@@ -158,6 +178,10 @@ func (d *Delegate) Spec() ports.ToolSpec {
     "task": {
       "type": "string",
       "description": "A tarefa de código, completa e autossuficiente. Inclua caminhos de arquivo e o critério de pronto."
+    },
+    "runner": {
+      "type": "string",
+      "description": "Opcional. Qual agente de código usar, entre os cadastrados nesta máquina. Deixe vazio para o padrão."
     }
   },
   "required": ["task"]
@@ -203,6 +227,17 @@ func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports
 	// --output-format json troca texto solto por resultado estruturado. É o que
 	// permite distinguir resposta de recusa, e o que traz custo e sessão — em
 	// texto, os três eram invisíveis.
+	// Runner alternativo, quando pedido E cadastrado.
+	//
+	// O comando sai de um catálogo fechado que só o `agentd` escreve, e chega
+	// como VETOR — nunca como string interpretada por shell. É a diferença que
+	// separa "escolher entre agentes" de "montar uma linha de comando": a
+	// segunda devolveria ao modelo o poder de escrever `sudo`, e com ele o
+	// rebaixamento para o usuário `agent` deixaria de valer.
+	if strings.TrimSpace(args.Runner) != "" {
+		return d.runAlternate(runCtx, args, env)
+	}
+
 	cmd := d.sandbox.Command(runCtx, d.binary,
 		"--allowedTools", strings.Join(allowedDelegateTools, ","),
 		"--output-format", "json",

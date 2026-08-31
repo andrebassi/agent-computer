@@ -11,13 +11,16 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/connectors"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/journal"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/runners"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
@@ -252,7 +255,14 @@ func run(o runOptions) error {
 	// chama API e sabe parar numa barreira sensível; o outro edita arquivo, mexe
 	// em git e abre subagentes. A ferramenta existe pelo caso misto — "leia o
 	// site e ajuste o código conforme" —, que nenhum dos dois faz sozinho.
-	toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", stateDir+"/anthropic.env", toolSandbox()))
+	// O catálogo é lido aqui também: pelo CLI a delegação existe igual, e um
+	// runner cadastrado que só funcionasse pela porta HTTP seria surpresa.
+	runnerCatalog, catalogErr := runners.Load(filepath.Join(stateDir, "runners.json"))
+	if catalogErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: catálogo de runners ignorado: %v\n", catalogErr)
+		runnerCatalog, _ = runners.Parse([]byte("{}"))
+	}
+	toolset = append(toolset, tools.NewDelegateSandboxed("/workspace", stateDir+"/anthropic.env", toolSandbox(), tools.WithRunners(runnerCatalog)))
 
 	// Conectores anexados com "@" no texto da tarefa. Só os pedidos entram:
 	// a descrição de cada ferramenta vai no prompt a cada iteração, então
@@ -316,8 +326,17 @@ func run(o runOptions) error {
 	// alguém agir.
 	eventSink := events.OnlyKinds(eventSpool, domain.EventBlocked, domain.EventFailed)
 
+	// Pelo CLI o diário também vale: é a mesma máquina, e uma lição aprendida
+	// numa tarefa de linha de comando serve às da porta HTTP igual.
+	//
+	// `WithTaskBudget` fica de FORA aqui de propósito: o CLI não tem teto de
+	// tempo, e inventar um mudaria o comportamento de um caminho que ninguém
+	// pediu para mudar.
+	taskJournal := journal.New(stateDir, time.Now, maxGuardrailsBytes)
+
 	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
-		service.WithEventSink(eventSink))
+		service.WithEventSink(eventSink),
+		service.WithGuardrailJournal(taskJournal))
 
 	// Ctrl+C precisa liberar a trava da tela: sem isto, uma interrupção deixaria
 	// a tela travada até alguém apagar o arquivo à mão.

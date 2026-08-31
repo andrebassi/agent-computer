@@ -45,6 +45,12 @@ type Agent struct {
 	// sink publica os fatos da tarefa para fora. Nunca é nil — o padrão descarta
 	// tudo, o que evita uma checagem em cada ponto de publicação.
 	sink ports.EventSink
+	// journal escreve os quatro arquivos de memória. Nunca é nil, pelo mesmo
+	// motivo do sink.
+	journal GuardrailJournal
+	// taskBudget é o tempo concedido à tarefa, usado pelo detector de tempo de
+	// parede. Zero desliga o detector — é o caso do CLI, que não tem teto.
+	taskBudget time.Duration
 }
 
 // discardSink é o destino padrão: descarta tudo.
@@ -57,6 +63,23 @@ type discardSink struct{}
 
 // Publish descarta o fato sem fazer nada.
 func (discardSink) Publish(context.Context, domain.TaskEvent) error { return nil }
+
+// discardJournal é o diário padrão: não grava nada.
+//
+// Mesmo motivo do discardSink — sem ele, cada um dos pontos de escrita
+// precisaria de uma checagem de nil, e a que faltasse viraria pânico só no
+// caminho de falha, que é o menos exercitado.
+type discardJournal struct{}
+
+func (discardJournal) RecordActivity(context.Context, string) error { return nil }
+func (discardJournal) RecordError(context.Context, string) error    { return nil }
+func (discardJournal) RecordProgress(context.Context, string) error { return nil }
+func (discardJournal) LearnLesson(context.Context, GuardrailKind, string) error {
+	return nil
+}
+
+// Lessons devolve vazio: sem diário configurado não há o que lembrar.
+func (discardJournal) Lessons() (string, error) { return "", nil }
 
 // Option configura o agente sem mudar a assinatura de NewAgent.
 //
@@ -71,6 +94,28 @@ func WithEventSink(sink ports.EventSink) Option {
 	return func(a *Agent) {
 		if sink != nil {
 			a.sink = sink
+		}
+	}
+}
+
+// WithGuardrailJournal liga o agente aos quatro arquivos de memória.
+func WithGuardrailJournal(journal GuardrailJournal) Option {
+	return func(a *Agent) {
+		if journal != nil {
+			a.journal = journal
+		}
+	}
+}
+
+// WithTaskBudget informa quanto tempo a tarefa tem.
+//
+// Quem sabe disso é o supervisor, que monta o contexto com prazo; o laço não
+// tem como descobrir sozinho — `context.Deadline` daria o instante final, mas
+// não o total concedido, e o detector precisa da FRAÇÃO consumida.
+func WithTaskBudget(budget time.Duration) Option {
+	return func(a *Agent) {
+		if budget > 0 {
+			a.taskBudget = budget
 		}
 	}
 }
@@ -97,7 +142,8 @@ func NewAgent(
 		// Descartar por padrão, e não nil: sem destino configurado o agente
 		// funciona igual, e não há um caminho onde esquecer a checagem de nil
 		// vire pânico em produção.
-		sink: discardSink{},
+		sink:    discardSink{},
+		journal: discardJournal{},
 	}
 	for _, opt := range opts {
 		opt(agent)
@@ -128,7 +174,9 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 
 	conv, err := a.store.LoadConversation(ctx, task.ID)
 	if err != nil || conv == nil {
-		conv = domain.NewConversation(task.ID, a.sysPrompt)
+		// As lições entram no prompt de sistema da conversa NOVA. Numa conversa
+		// carregada elas já estão lá, e reinjetá-las duplicaria o bloco.
+		conv = domain.NewConversation(task.ID, a.systemPromptWithLessons())
 		conv.AddUser(task.Prompt)
 	}
 
@@ -149,12 +197,37 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 // mesma.
 func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Conversation) error {
 	specs := a.toolSpecs()
+	guard := newGuardrailState(a.clock(), a.taskBudget)
 
 	for i := 0; i < maxIterations; i++ {
+		// Detectores ANTES de chamar o modelo: parar depois de gastar o turno
+		// seria pagar exatamente aquilo que o teto existe para evitar.
+		//
+		// A ordem entre eles é deliberada — turnos primeiro, porque é o teto
+		// duro; tempo depois, porque é o que mais depende de quando se olha.
+		if hit := checkTurnCap(task); hit != nil {
+			if err := a.applyHit(ctx, task, conv, hit); err != nil {
+				return err
+			}
+			return a.settle(ctx, task, conv)
+		}
+		if hit := guard.checkWallClock(a.clock()); hit != nil {
+			if err := a.applyHit(ctx, task, conv, hit); err != nil {
+				return err
+			}
+			return a.settle(ctx, task, conv)
+		}
+
 		conv.Trim(maxHistoryMessages)
 		if err := a.store.SaveConversation(ctx, conv); err != nil {
 			return fmt.Errorf("gravando conversa: %w", err)
 		}
+
+		turnStarted := a.clock()
+		// O contador é incrementado ANTES da chamada, e não depois: um turno que
+		// falha no meio consumiu recurso do mesmo jeito, e não contá-lo deixaria
+		// o teto ser furado justamente pelo caminho que mais repete.
+		task.TurnsUsed++
 
 		completion, err := a.complete(ctx, conv, specs)
 		if err != nil {
@@ -168,8 +241,30 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 
 		conv.AddAssistant(completion.Content, completion.ToolCalls)
 
-		// Sem chamada de ferramenta, o modelo considerou a tarefa terminada.
+		a.recordTurn(ctx, task, i, completion, a.clock().Sub(turnStarted))
+
+		// Sem chamada de ferramenta, o modelo considerou a tarefa terminada —
+		// MENOS quando a resposta foi cortada no meio.
+		//
+		// `StopReason` era preenchido pelo adaptador e nunca lido: uma resposta
+		// truncada por limite de saída (`finish_reason: "length"`) chega sem
+		// chamada de ferramenta e era tratada como conclusão bem-sucedida. A
+		// tarefa terminava `done`, com a resposta pela metade e ninguém sabendo.
 		if len(completion.ToolCalls) == 0 {
+			if truncatedStop(completion.StopReason) {
+				hit := &GuardrailHit{
+					Kind: GuardrailTruncated,
+					Detail: fmt.Sprintf(
+						"a resposta do modelo foi cortada por limite de saída (%q) e a tarefa parou. "+
+							"Isso não é conclusão: o que veio pode estar pela metade.",
+						completion.StopReason),
+					Lesson: "",
+				}
+				if err := a.applyHit(ctx, task, conv, hit); err != nil {
+					return err
+				}
+				return a.settle(ctx, task, conv)
+			}
 			if err := task.Finish(a.clock()); err != nil {
 				return err
 			}
@@ -181,6 +276,18 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 		outcomes := a.runToolCalls(ctx, task, completion.ToolCalls)
 		blockedInTurn := false
 		for _, out := range outcomes {
+			// O detector de laço vê o resultado ANTES de ele virar histórico.
+			// `ToolResult.Failed` era escrito por toda ferramenta e lido por
+			// ninguém; é aqui que ele passa a ter consumidor.
+			if hit := a.observeOutcome(ctx, guard, out); hit != nil {
+				if err := a.applyHit(ctx, task, conv, hit); err != nil {
+					return err
+				}
+				// O resultado ainda entra no histórico: sem ele, quem abrir a
+				// conversa vê o bloqueio sem a falha que o causou.
+				_, _ = a.applyOutcome(ctx, task, conv, out)
+				return a.settle(ctx, task, conv)
+			}
 			blocked, err := a.applyOutcome(ctx, task, conv, out)
 			if err != nil {
 				return err
@@ -286,6 +393,22 @@ func (a *Agent) publish(ctx context.Context, task *domain.Task, conv *domain.Con
 // Resume devolve o controle ao agente depois que a pessoa resolveu o passo
 // sensível, e continua a tarefa de onde ela parou.
 func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string) error {
+	// A TRAVA VEM PRIMEIRO, antes de mexer no estado.
+	//
+	// A ordem inversa custava a tarefa inteira: `task.Resume` mudava para
+	// `running`, `persist` gravava, e só então a trava era tentada. Com a tela
+	// ocupada, o erro subia para o supervisor, que via `Active() == true` e
+	// chamava `markFailed` — uma tarefa BLOQUEADA, esperando uma pessoa, virava
+	// `failed`, e o trabalho e o pedido de ajuda iam junto.
+	//
+	// Tomando antes, o caminho de erro devolve a tarefa intacta: ela continua
+	// `blocked`, e quem chamou tenta de novo quando a tela vagar.
+	release, err := a.lock.Acquire(ctx, task.Screen, task.ID)
+	if err != nil {
+		return fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
+	}
+	defer func() { _ = release() }()
+
 	if err := task.Resume(a.clock()); err != nil {
 		return err
 	}
@@ -309,14 +432,6 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 	if err := a.persist(ctx, task); err != nil {
 		return err
 	}
-	// A trava é tomada AQUI, e não dentro do laço, porque o laço é o mesmo do
-	// Run — que já a tem. Retomar exige tomá-la de novo: o processo anterior
-	// morreu, e outra tarefa pode ter chegado à tela nesse intervalo.
-	release, err := a.lock.Acquire(ctx, task.Screen, task.ID)
-	if err != nil {
-		return fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
-	}
-	defer func() { _ = release() }()
 
 	return a.iterate(ctx, task, conv)
 }

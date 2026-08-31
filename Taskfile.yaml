@@ -139,6 +139,12 @@ tasks:
       - ./scripts/21-web-search-test.sh 2>&1 | tee logs/web-search-test.log
       - ./scripts/13-integration-test.sh 2>&1 | tee logs/integration.log
 
+  guardrails-test:
+    desc: 'Prova que os guardrails contêm: detector bloqueia, lição chega ao prompt, modelo não escreve'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/36-guardrails-test.sh 2>&1 | tee logs/guardrails-test.log
+
   ssrf-test:
     desc: 'Prova que conector não alcança a rede interna — nem por NOME que resolve para lá'
     cmds:
@@ -166,6 +172,7 @@ tasks:
       - ./scripts/25-serve-integration-test.sh 2>&1 | tee logs/serve-test.log
       - ./scripts/32-end-to-end.sh 2>&1 | tee logs/e2e.log
       - ./scripts/35-connector-ssrf-test.sh 2>&1 | tee logs/ssrf-test.log
+      - ./scripts/36-guardrails-test.sh 2>&1 | tee logs/guardrails-test.log
 
   privilege-test:
     desc: 'Prova adversarial: o modelo não alcança o cofre, não vira root, não troca o binário'

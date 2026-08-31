@@ -59,6 +59,7 @@ task test:cov         # cobertura ≥90% de statements, domínio 100%, com -race
 task suites           # 4 suítes de máquina (43 seções)
 task functional       # 3 testes que CHAMAM O MODELO de verdade
 task hostile          # entrada malformada, degradação, concorrência
+task guardrails-test  # detector bloqueia, lição chega ao prompt, modelo não escreve
 ```
 
 A regra que o mapa aplica: **uma funcionalidade tem cobertura quando existe um

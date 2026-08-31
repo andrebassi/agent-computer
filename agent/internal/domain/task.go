@@ -32,9 +32,15 @@ const (
 )
 
 // BlockReason enumera os motivos pelos quais o agente para e chama a pessoa.
-// São exatamente os cinco que a documentação lista, e não uma lista nossa:
-// senha ou passkey, verificação em duas etapas, CAPTCHA, cobrança ou
-// verificação de identidade, e site que exige explicitamente uma pessoa.
+//
+// Os CINCO PRIMEIROS são exatamente os que a documentação lista, e não uma
+// lista nossa: senha ou passkey, verificação em duas etapas, CAPTCHA, cobrança
+// ou verificação de identidade, e site que exige explicitamente uma pessoa.
+// Todos descrevem algo que o SITE exige.
+//
+// O sexto (`guardrail`) é nosso e tem origem oposta — nós é que paramos o
+// agente. A separação está anotada na constante, e vale mantê-la: misturar os
+// dois faria a tela explicar a causa errada.
 type BlockReason string
 
 const (
@@ -43,6 +49,19 @@ const (
 	BlockCaptcha         BlockReason = "captcha"
 	BlockPaymentIdentity BlockReason = "payment_identity"
 	BlockHumanRequired   BlockReason = "human_required"
+
+	// BlockGuardrail é o sexto, e é NOSSO — não vem da documentação do produto,
+	// ao contrário dos cinco acima.
+	//
+	// Existe porque os outros cinco descrevem coisas que o SITE exige, e um
+	// guardrail é o oposto: nós é que paramos o agente. Reaproveitar
+	// `human_required` faria a tela dizer "o site exige uma pessoa" quando o
+	// site não exigiu nada — mentira sobre a causa, justamente na hora em que
+	// alguém precisa entender por que a tarefa parou.
+	//
+	// Quem o emite é sempre um detector determinístico, nunca o modelo: ele não
+	// tem ferramenta que produza este motivo.
+	BlockGuardrail BlockReason = "guardrail"
 )
 
 // ValidBlockReason diz se o motivo está entre os previstos. Quem escolhe o
@@ -50,7 +69,7 @@ const (
 // desconhecido bloquearia a tarefa sem que a tela soubesse o que pedir.
 func ValidBlockReason(r BlockReason) bool {
 	switch r {
-	case BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired:
+	case BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired, BlockGuardrail:
 		return true
 	}
 	return false
@@ -70,6 +89,8 @@ func (r BlockReason) Description() string {
 		return "precisa confirmar pagamento ou identidade"
 	case BlockHumanRequired:
 		return "o site exige uma pessoa"
+	case BlockGuardrail:
+		return "um limite de segurança foi atingido"
 	}
 	return "motivo desconhecido"
 }
@@ -103,6 +124,15 @@ type Task struct {
 	UpdatedAt   time.Time
 	// Failure guarda o motivo quando State é StateFailed.
 	Failure string
+	// TurnsUsed conta as chamadas ao modelo desta tarefa, ACUMULADAS entre
+	// invocações.
+	//
+	// Mora aqui, e não numa variável do laço, por um defeito medido: o contador
+	// de iterações nasce em zero a cada `Run` E a cada `Resume`. Uma tarefa que
+	// alterna bloqueio e retomada ganhava 60 turnos novos a cada volta, sem
+	// teto nenhum sobre o total. Persistido junto do resto do estado, ele
+	// sobrevive à retomada e ao reinício do processo.
+	TurnsUsed int
 }
 
 // NewTask cria uma tarefa pendente. A tela é validada aqui porque uma tela fora
