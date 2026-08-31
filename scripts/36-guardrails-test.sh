@@ -262,8 +262,17 @@ else
   fail "o activity.log nao registra custo"
 fi
 
-# O TETO. Forcado a um centavo, so nesta invocacao: uma tarefa real custa
-# ~US$ 0,004, entao um centavo cai no segundo ou terceiro turno.
+# O TETO, forcado a meio milesimo de dolar so nesta invocacao.
+#
+# O numero e baixo assim de proposito: UM turno precisa estoura-lo. Com teto de
+# um centavo o teste ficou intermitente -- medido em 31/08/2026, a mesma tarefa
+# custou US$ 0,0116 numa rodada e US$ 0,0098 na seguinte, e a segunda passou
+# raspando sem bloquear.
+#
+# A causa da variacao e o CACHE: 512 tokens cacheados numa rodada, 1408 na
+# outra, e token em cache custa quatro vezes menos. Ou seja, o custo de uma
+# tarefa identica varia com o que o fornecedor resolveu cachear -- que nao e
+# coisa sobre a qual um teste possa se apoiar.
 before="$(agent_ssh "python3 -c \"
 import json,glob
 print(sum(1 for c in glob.glob('$STATE/tasks/*.json') if json.load(open(c)).get('BlockReason')=='guardrail'))
@@ -278,15 +287,15 @@ for caminho in glob.glob('$STATE/tasks/*.json'):
 \" 2>/dev/null" | tr -d '\r')"
 [ -n "$stuckTask" ] && agentd_run "-abandon -task $stuckTask" >/dev/null 2>&1
 
-output="$(root_ssh "AGENTD_MAX_COST_USD=0.01 setpriv --reuid=agentd --regid=agentd --init-groups -- /usr/local/bin/agentd -screen 5 -prompt 'Liste os arquivos de /workspace com a ferramenta shell, depois conte quantos sao, depois diga o nome do maior. Faca um passo por vez.'" 2>&1)"
-createdTask="$(printf '%s' "$output" | sed -n 's/.*\(task-[0-9]\{6,\}\).*/\1/p' | head -1)"
+output="$(root_ssh "AGENTD_MAX_COST_USD=0.0005 setpriv --reuid=agentd --regid=agentd --init-groups -- /usr/local/bin/agentd -screen 5 -prompt 'Liste os arquivos de /workspace com a ferramenta shell, depois conte quantos sao, depois diga o nome do maior. Faca um passo por vez.'" 2>&1)"
+costTask="$(printf '%s' "$output" | sed -n 's/.*\(task-[0-9]\{6,\}\).*/\1/p' | head -1)"
 
-if [ -z "$createdTask" ]; then
+if [ -z "$costTask" ]; then
   fail "a tarefa do teto de custo nao foi criada"
 else
   state="$(agent_ssh "python3 -c \"
 import json
-t = json.load(open('$STATE/tasks/$createdTask.json'))
+t = json.load(open('$STATE/tasks/$costTask.json'))
 print(t['State'], '|', t.get('BlockReason',''), '| US\$%.4f' % t.get('CostUSD',0), '|', t.get('BlockDetail','')[:70])
 \" 2>/dev/null" | tr -d '\r')"
   case "$state" in

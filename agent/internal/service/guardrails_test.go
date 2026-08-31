@@ -749,3 +749,22 @@ func TestCostCapFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
 		}
 	}
 }
+
+// O valor em dólares é legível nas duas ordens de grandeza.
+//
+// Duas casas fixas mostrariam "US$ 0.00" para o que este agente de fato gasta —
+// e essa é a frase que a pessoa lê na tela ao ver a tarefa parada.
+func TestCostIsReadableAtBothScales(t *testing.T) {
+	cases := map[float64]string{
+		0.0034: "US$ 0.0034",
+		0.0005: "US$ 0.0005",
+		3.00:   "US$ 3.00",
+		12.5:   "US$ 12.50",
+		0:      "US$ 0.0000",
+	}
+	for value, expected := range cases {
+		if got := formatUSD(value); got != expected {
+			t.Errorf("formatUSD(%v) = %q, esperava %q", value, got, expected)
+		}
+	}
+}

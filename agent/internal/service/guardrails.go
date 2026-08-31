@@ -463,9 +463,26 @@ func (a *Agent) accrueCost(task *domain.Task, completion *ports.Completion) *Gua
 	return &GuardrailHit{
 		Kind: GuardrailCostCap,
 		Detail: fmt.Sprintf(
-			"a tarefa já custou US$ %.2f em inferência (teto US$ %.2f, somando as retomadas) "+
+			"a tarefa já custou %s em inferência (teto %s, somando as retomadas) "+
 				"e parou. Foram %d tokens de entrada e %d de saída em %d turnos.",
-			task.CostUSD, costCapUSD, task.PromptTokens, task.CompletionTokens, task.TurnsUsed),
+			formatUSD(task.CostUSD), formatUSD(costCapUSD),
+			task.PromptTokens, task.CompletionTokens, task.TurnsUsed),
 		Lesson: "",
 	}
+}
+
+// formatUSD escreve um valor em dólares com casas suficientes para significar
+// algo.
+//
+// `%.2f` fixo engole o que este agente gasta: uma tarefa custa ~US$ 0,003, e
+// duas casas mostram "US$ 0.00" — que não informa nada justamente na frase que
+// a pessoa lê na tela ao ver a tarefa parada. Medido em 31/08/2026, num teste
+// com teto forçado: "a tarefa já custou US$ 0.00 (teto US$ 0.00)".
+//
+// Abaixo de um centavo, quatro casas; acima, duas — que é como se lê dinheiro.
+func formatUSD(value float64) string {
+	if value < 0.01 {
+		return fmt.Sprintf("US$ %.4f", value)
+	}
+	return fmt.Sprintf("US$ %.2f", value)
 }
