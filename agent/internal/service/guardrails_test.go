@@ -136,6 +136,27 @@ func TestToolLoopFiresOnlyOnThirdIdenticalFailure(t *testing.T) {
 	}
 }
 
+// A mensagem do bloqueio é lida por gente, e o número concorda com o
+// substantivo.
+//
+// O caso de 1 não é hipotético: é exatamente o que a suíte de máquina produz ao
+// baixar o teto por variável de ambiente, e o texto acaba colado em
+// acompanhamento e relatório.
+func TestToolLoopAgreesInNumber(t *testing.T) {
+	// A contagem 1 chega aqui quando o teto é baixado por variável de ambiente,
+	// então o singular é caminho real e não hipótese.
+	if got := repeatPhrase(1); got != "1 vez seguida" {
+		t.Errorf("singular errado: %q", got)
+	}
+	if got := repeatPhrase(3); got != "3 vezes seguidas" {
+		t.Errorf("plural errado: %q", got)
+	}
+	hit := checkToolLoop("shell", "args", "erro", identicalFailures)
+	if hit == nil || !strings.Contains(hit.Detail, repeatPhrase(identicalFailures)) {
+		t.Errorf("o detalhe devia trazer o número concordado: %+v", hit)
+	}
+}
+
 // Sucesso no meio ZERA a contagem.
 //
 // É o que separa "insiste no mesmo erro" de "erra enquanto explora". Sem isto,

@@ -27,6 +27,8 @@ Lab — serve para testar o conceito, não para produção.
 | Seção | O que traz |
 |---|---|
 | [Como usar, com um caso real](#como-usar-com-um-caso-real-do-começo-ao-fim) | **Comece por aqui se quer VER funcionando** |
+| [Receituário de exemplos](#receituário-exemplos-que-rodam) | **todo comando que dá para dar**, com o que volta de cada um |
+| [O percurso de uma tarefa](docs/TASK-LIFECYCLE.md) | **como as peças se encaixam** — do pedido ao arquivo gravado |
 | [Arquitetura ponta a ponta](#arquitetura-ponta-a-ponta) | o modelo explicado, as 12 cláusulas com código e prova |
 | [Auditoria de fidelidade](#auditoria-de-fidelidade-à-documentação) | placar do que existe e do que falta |
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
@@ -79,6 +81,377 @@ Cada camada achou o que as outras não achariam:
 | hostil | campo desconhecido aceito com 201 (um `"screens"` em vez de `"screen"` ia para a tela errada em silêncio) |
 | boot | **`agentd-api` não subia depois do reboot** — perdeu o `wantedBy` na migração; sistema `running`, zero unidades em falha, porta fora do ar |
 | a própria infra de teste | **duas suítes concorrentes** contra a mesma máquina — log entrelaçado, `erros: 1` mentiroso numa e `erros: 0` sem valor na outra; fechado por `scripts/suite-lock.sh` |
+
+## Receituário: exemplos que rodam
+
+Tudo abaixo é comando real, copiável. Os que tocam a máquina rodam pelo
+`agentd_run` dos scripts (que executa como `agentd`, o usuário que lê o cofre) ou
+por `task`.
+
+### Tarefa simples
+
+```bash
+# do Mac, pelo script (roda na máquina, como agentd)
+source scripts/lib.sh && load_token
+agentd_run '-screen 1 -prompt "Qual a cotação do dólar agora?"'
+
+# direto na máquina
+agentd -screen 1 -prompt "Liste os arquivos de /workspace/projects"
+```
+
+### Com habilidade: `/nome`
+
+```bash
+agentd_run '-screen 1 -prompt "/web-search quem joga no Brasileirão hoje?"'
+agentd_run '-screen 2 -prompt "/web-diagnosis o site exemplo.com está fora do ar"'
+```
+
+O marcador some do texto; o conteúdo da habilidade entra **depois** do pedido.
+Habilidade inexistente é silenciosa pela porta HTTP — confira com
+`agentd -catalog list`.
+
+### Com conector: `@nome`
+
+```bash
+agentd_run '-screen 1 -prompt "@digitalocean liste meus droplets e o custo mensal"'
+agentd_run '-screen 1 -prompt "@gitlab abra uma issue no projeto 123 com título Falha no deploy"'
+
+# dois conectores na mesma tarefa
+agentd_run '-screen 1 -prompt "@digitalocean @gitlab compare o custo do droplet e abra uma issue com o número"'
+```
+
+Só o conector **anexado** vira ferramenta: o catálogo inteiro custaria token a
+cada iteração e daria alcance a serviços que a tarefa não pediu.
+
+### Habilidade + conector juntos
+
+```bash
+agentd_run '-screen 1 -prompt "@digitalocean /web-search compare o preço do meu droplet com a média de mercado"'
+```
+
+### Delegação a um agente de código
+
+```bash
+# padrão: Claude Code
+agentd_run '-screen 1 -prompt "Use delegate_to_code para criar um script Python que soma dois números, com teste"'
+
+# escolhendo o runner
+agentd_run '-screen 3 -prompt "Use delegate_to_code com runner=opencode e a tarefa: crie /workspace/projects/oi.txt com a palavra FUNCIONOU"'
+```
+
+Os quatro runners cadastrados, e o que acontece com cada um (medido em
+31/08/2026):
+
+| `runner=` | Resultado |
+|---|---|
+| omitido | Claude Code, como sempre |
+| `opencode` | ✅ funciona — grava o arquivo pedido como `agent:agent 644` |
+| `codex` | ❌ o CLI quer login de conta ChatGPT; a chave de API não serve |
+| `droid`, `kiro` | ❌ não instalados — falha **nomeando o binário que falta** |
+
+```bash
+$ agentd_run '-screen 3 -prompt "Use delegate_to_code com runner=opencode e a
+              tarefa: crie /workspace/projects/opencode-vivo.txt com FUNCIONOU"' 2>&1
+# → runner "opencode" terminou.
+$ ssh root@<maquina> 'ls -l /workspace/projects/opencode-vivo.txt; cat "$_"'
+-rw-r--r-- 1 agent agent 10 Aug 30 23:12 /workspace/projects/opencode-vivo.txt
+FUNCIONOU
+```
+
+O dono `agent` na saída é a prova de que a delegação roda **rebaixada** — o
+runner herda o usuário do modelo, não o do `agentd`.
+
+Runner fora do catálogo devolve a lista dos que existem, em vez de "não
+funcionou":
+
+```
+runner "gpt5" não está no catálogo; disponíveis: claude, codex, droid, opencode
+```
+
+Contrato completo, credencial por runner e `HOME` próprio em
+[`EXTENDING.md`](docs/EXTENDING.md).
+
+### Navegador
+
+O agente pilota o Chrome da própria tela — não há flag, são ferramentas que ele
+escolhe usar:
+
+```bash
+agentd_run '-screen 1 -prompt "Abra https://news.ycombinator.com, leia os 5 primeiros títulos e resuma"'
+agentd_run '-screen 1 -prompt "Abra https://example.com, clique em Learn more e diga onde foi parar"'
+agentd_run '-screen 1 -prompt "Tire uma captura da tela atual e descreva o que aparece"'
+```
+
+Diante de senha, 2FA ou CAPTCHA ele **para e pede take-over** — não tenta
+contornar:
+
+```bash
+agentd_run '-screen 1 -prompt "Entre em https://github.com/login com o usuário andrebassi"'
+# → tela 1: PRECISA DE VOCÊ — precisa de senha ou passkey
+```
+
+### Take-over: retomar e abandonar
+
+```bash
+task open                                       # veja a tela e faça o que falta
+agentd_run '-resume -task task-1788... -note "senha digitada, pode seguir"'
+agentd_run '-abandon -task task-1788...'        # desiste e libera a tela
+```
+
+### Telas: mais de um agente na mesma máquina
+
+```bash
+agent-status                    # o que cada tela está fazendo
+screen-add 2                    # cria a tela 2, semeada com a sessão da 1
+screen-remove 2                 # derruba (o perfil do navegador fica)
+task screens                    # lista as telas ativas
+
+# duas tarefas ao mesmo tempo, telas diferentes
+agentd_run '-screen 1 -prompt "pesquise A"' &
+agentd_run '-screen 2 -prompt "pesquise B"' &
+```
+
+Teto de **4 tarefas simultâneas** na máquina; a quinta recebe `429`.
+
+### Pela porta HTTP
+
+```bash
+TOKEN=$(cat /workspace/agent/api-token)
+
+# criar
+curl -sS -X POST http://127.0.0.1:8787/tasks \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"prompt":"@digitalocean liste meus droplets","screen":1}'
+
+# consultar (traz o estado E a resposta)
+curl -sS http://127.0.0.1:8787/tasks/task-1788... -H "Authorization: Bearer $TOKEN"
+
+# retomar depois do take-over
+curl -sS -X POST http://127.0.0.1:8787/tasks/task-1788.../resume \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"note":"senha digitada"}'
+
+# abandonar
+curl -sS -X POST http://127.0.0.1:8787/tasks/task-1788.../abandon \
+  -H "Authorization: Bearer $TOKEN"
+
+# saúde (a única rota sem token)
+curl -sS http://127.0.0.1:8787/health
+```
+
+Os códigos que importam: `201` criada · `409` **aquela tela** ocupada · `429` a
+**máquina** cheia · `401` token errado · `413` corpo acima de 64 KB.
+
+De fora, pelo túnel SSH — a porta nunca sai de `127.0.0.1`:
+
+```bash
+ssh -N -L 8787:127.0.0.1:8787 root@<maquina> &
+curl -sS http://127.0.0.1:8787/health
+```
+
+### Catálogo: conectores e habilidades
+
+```bash
+agentd -catalog list                                  # o que está instalado
+agentd -catalog install examples/connectors/gitlab.yaml
+agentd -catalog secret gitlab-token                   # pede pelo stdin, sem eco
+agentd -catalog remove gitlab
+agentd -catalog skill-save deploy-check < /tmp/procedimento.md
+agentd -catalog skill-remove deploy-check
+```
+
+O `list` diz, por conector, **se a credencial existe** — é a diferença entre
+"não funciona" e "faltou um passo":
+
+```
+CONECTORES (2)
+
+  @digitalocean — credencial configurada
+     Consulta e opera recursos do DigitalOcean pela API: droplets, volumes ...
+     · digitalocean.get_account
+     · digitalocean.list_droplets
+     · digitalocean.list_snapshots
+
+  @gitlab — ⚠️  CREDENCIAL FALTANDO — agentd -catalog secret gitlab-token
+     Trabalha com issues e merge requests do GitLab pela API, em vez de cli...
+     · gitlab.create_issue
+     · gitlab.list_issues
+
+HABILIDADES (2)
+  /estilo — Responda sempre comecando com a palavra CONFIRMADO.
+  /web-search — Buscar qualquer coisa na internet
+```
+
+⚠️ `-catalog secret` **recusa entrada que não venha de terminal**. É de
+propósito: `echo "$TOKEN" | agentd -catalog secret x` deixaria o segredo no
+histórico do shell e em `ps`. Rode no terminal e digite.
+
+### Diagnóstico
+
+```bash
+agentd -connector-probe https://api.exemplo.com/health   # alcançável?
+agentd -vault-check                                       # o cofre ABRE?
+agentd -notify-drain                                      # avisos pendentes (não consome)
+agentd -notify-drain -webhook https://hooks.exemplo/xyz   # entrega e limpa
+
+O que cada um responde:
+
+```
+$ agentd -vault-check
+cofre legivel
+
+$ curl -sS http://127.0.0.1:8787/health
+{"status":"ok"}
+
+$ agentd -notify-drain
+37 aviso(s) pendente(s), sem destino configurado:
+  tela 1 PRECISA DE VOCÊ: precisa de senha ou passkey — A página de login pede
+    usuário e senha. Não envie a senha no chat.
+  tela 4 PRECISA DE VOCÊ: um limite de segurança foi atingido — a ferramenta
+    shell falhou 1 vez seguida com os mesmos argumentos: cat: /workspace/x: No
+    such file or directory
+  tela 5 PRECISA DE VOCÊ: um limite de segurança foi atingido — a tarefa já
+    custou US$ 0.0050 em inferência (teto US$ 0.0005, somando as retomadas) e
+    parou. Foram 2787 tokens de entrada e 26 de saída em 1 turnos.
+  tela 3 falhou: processo interrompido; estado reconciliado no boot
+```
+
+⚠️ `-notify-drain` **sem `-webhook` não consome** a fila: dá para olhar quantas
+vezes quiser. Com webhook, entrega e limpa — e só aí some.
+
+E `agent-status`, que é o retrato da máquina:
+
+```
+=== telas ===
+  tela 1: openbox=active x11vnc=active novnc=active chrome=active | web 127.0.0.1:6081 CDP 127.0.0.1:9221
+  tela 2: openbox=active x11vnc=active novnc=active chrome=active | web 127.0.0.1:6082 CDP 127.0.0.1:9222
+
+=== estado duravel ===
+  volume: VOLUME_MONTADO
+  /dev/sda         20G  1.6G   18G   9% /workspace
+```
+
+task answers            # a RESPOSTA das últimas tarefas, não só o estado
+task serve-status       # porta HTTP e timer de avisos
+task serve-logs         # log do serviço
+task health             # separa os 4 diagnósticos de máquina inalcançável
+```
+
+### Ciclo de vida da máquina
+
+```bash
+task up                    # cria (Ubuntu + cloud-init, o padrão)
+AGENT_OS=nixos task up     # cria com NixOS declarativo
+DROPLET_IMAGE=<id> task up # cria a partir de imagem pronta: pula ~15 min
+
+task deploy                # compila e instala o agentd (gate de cobertura antes)
+task nixos:rebuild         # aplica mudança de config em 46-69s, sem recriar
+task restart               # reinicia os serviços
+task update                # atualiza pacotes
+task snapshot              # foto do VOLUME (o trabalho)
+task image-snapshot        # foto do SISTEMA (a máquina)
+task restore -- --latest   # restaura o volume
+task destroy               # derruba o droplet; o volume sobrevive
+task cost                  # quanto está custando agora
+```
+
+### O que fica registrado depois de cada tarefa
+
+Nenhum dos quatro arquivos é escrito pelo modelo — todos são `agentd:agent 0640`
+(ele lê, não escreve). Trechos reais desta máquina:
+
+```
+$ tail -3 /workspace/agent/progress.md
+[…] tarefa=task-1788144095182313041 tela=3 estado=done turnos=1 resposta=tudo certo
+[…] tarefa=task-1788144110161016609 tela=4 estado=blocked turnos=1 motivo=guardrail
+    detalhe=a ferramenta shell falhou 1 vez seguida com os mesmos argumentos:
+    cat: /workspace/nao-existe-guardrail.txt: No such file or directory
+[…] tarefa=task-1788144159324010959 tela=5 estado=blocked turnos=1 motivo=guardrail
+    detalhe=a tarefa já custou US$ 0.0050 em inferência (teto US$ 0.0005) e parou.
+
+$ tail -2 /workspace/agent/activity.log
+[…] tarefa=…226439714498 tela=3 iteracao=1 turnos=1 duracao=6.956s tokens=2808/8
+    cache=512 custo=US$0.0049 parada=tool_calls ferramentas=ecoteste.eco
+[…] tarefa=…226439714498 tela=3 iteracao=2 turnos=2 duracao=4.173s tokens=2909/101
+    cache=2688 custo=US$0.0073 parada=stop ferramentas=nenhuma
+```
+
+Repare no `cache=`: da primeira para a segunda iteração ele salta de 512 para
+2688 tokens. É o mesmo prompt sendo reaproveitado a **1/4 do preço** — e é por
+isso que a ordem das ferramentas no prompt é estável.
+
+E a redação aparecendo no registro, com o cabeçalho de um conector:
+
+```
+resposta=A operação eco devolveu exatamente isto:
+{"headers":{"host":"postman-echo.com","x-segredo-de-teste":"[REDIGIDO]…
+```
+
+### Ver um guardrail disparar, de propósito
+
+Os tetos são variáveis de ambiente, então dá para provocá-los sem esperar duas
+horas nem gastar três dólares — é assim que a suíte 36 os exercita:
+
+```bash
+# custo: teto de meio centavo, qualquer tarefa estoura
+AGENTD_MAX_COST_USD=0.0005 agentd -screen 5 -prompt "resuma o que é DNS"
+# → blocked: a tarefa já custou US$ 0.0050 em inferência (teto US$ 0.0005,
+#   somando as retomadas) e parou. Foram 2787 tokens de entrada e 26 de saída.
+
+# laço de ferramenta: uma falha idêntica já basta
+AGENTD_MAX_TOOL_FAILURES=1 agentd -screen 4 \
+  -prompt "rode: cat /workspace/nao-existe.txt"
+# → blocked: a ferramenta shell falhou 1 vez seguida com os mesmos argumentos
+
+# turnos acumulados
+AGENTD_MAX_TURNS=1 agentd -screen 3 -prompt "pesquise três coisas diferentes"
+
+# e a máquina cheia — no serviço HTTP, que é quem conta as simultâneas
+AGENTD_MAX_CONCURRENT_TASKS=1 …   # a segunda tarefa recebe 429
+```
+
+⚠️ As telas acima de 2 **não existem por padrão**: `screen-add 5` antes, senão o
+pedido é recusado por tela inválida. A suíte 36 cria as que usa.
+
+Valor inválido cai no padrão: teto desligado por engano é o defeito que eles
+existem para evitar.
+
+⚠️ **`blocked` não é `failed`.** A tela e o trabalho ficam; `-resume` continua de
+onde parou. Se o guardrail encerrasse a tarefa, parar cedo custaria tudo — e a
+primeira reação de quem usa seria desligá-lo.
+
+### Limites, e como ajustá-los
+
+Todos são variáveis de ambiente do serviço:
+
+```bash
+AGENTD_MAX_TURNS=180              # turnos acumulados por tarefa
+AGENTD_MAX_TOOL_FAILURES=3        # falhas idênticas seguidas
+AGENTD_MAX_COST_USD=3.00          # custo por tarefa, em dólares
+AGENTD_MAX_CONCURRENT_TASKS=4     # tarefas simultâneas na máquina
+```
+
+Valor inválido cai no padrão — teto desligado por engano é o defeito que eles
+existem para evitar.
+
+### Verificação
+
+```bash
+task lint              # 5 gates de script, no Mac
+task nixos:validate    # config NixOS: sintaxe, ASCII, sistema inteiro
+task test:cov          # cobertura ≥90%, domínio 100%, com -race
+task suites            # 6 suítes de máquina
+task guardrails-test   # os detectores bloqueiam de verdade
+task redaction-test    # o segredo some do histórico
+task ssrf-test         # conector não alcança a rede interna
+task functional        # os 3 que chamam o modelo
+task hostile           # entrada malformada, degradação, concorrência
+task examples          # recaptura as saídas deste receituário na máquina
+```
+
+⚠️ **Os exemplos acima não são de memória**: `task examples` roda cada comando
+na máquina e imprime o que volta. Se um deles mudar de forma, a diferença
+aparece aqui — exemplo em documentação envelhece calado.
 
 ## Guardrails: o que para o agente
 

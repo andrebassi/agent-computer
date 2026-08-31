@@ -17,6 +17,8 @@ type fakeResolver struct {
 	// seenPath guarda o caminho de prompt que a ferramenta passou, para o teste
 	// conferir que o arquivo — e não o texto — é o que viaja.
 	seenPath string
+	// envFile é o arquivo de credencial que o dublê declara para o runner.
+	envFile string
 }
 
 // Resolve devolve o comando combinado, ou o erro combinado.
@@ -34,6 +36,9 @@ func (f *fakeResolver) Resolve(_, promptPath string) ([]string, bool, error) {
 
 // Names lista os runners do dublê.
 func (f *fakeResolver) Names() []string { return f.names }
+
+// EnvFileFor devolve o arquivo de credencial combinado, ou vazio para o padrão.
+func (f *fakeResolver) EnvFileFor(string) string { return f.envFile }
 
 // newRunnerDelegate monta a delegação com um resolvedor de mentira.
 func newRunnerDelegate(t *testing.T, resolver RunnerResolver) *Delegate {
@@ -196,5 +201,80 @@ func TestPromptFileIsOwnerOnly(t *testing.T) {
 	content, _ := os.ReadFile(path)
 	if string(content) != "conteúdo sensível" {
 		t.Errorf("o conteúdo devia ser preservado: %q", content)
+	}
+}
+
+// Runner com credencial PRÓPRIA usa o arquivo dele, não o do padrão.
+//
+// Sem isto o mesmo arquivo iria para todos: o Codex receberia a chave da
+// Anthropic e o Claude Code a da OpenAI. Nenhum precisa da do outro, e um agente
+// de código executa comando arbitrário por desenho — a chave que ele alcança é
+// a chave que pode sair da máquina.
+func TestRunnerUsesItsOwnCredentialFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/anthropic.env", []byte("ANTHROPIC_API_KEY=do-claude\n"), 0o600); err != nil {
+		t.Fatalf("preparando o padrão: %v", err)
+	}
+	if err := os.WriteFile(dir+"/openai.env", []byte("OPENAI_API_KEY=do-codex\n"), 0o600); err != nil {
+		t.Fatalf("preparando a do runner: %v", err)
+	}
+	// `printenv VARIAVEL` imprime SÓ ela. Despejar o ambiente inteiro não serve:
+	// ele passa dos 6 KB de truncamento da delegação, e a variável procurada fica
+	// de fora do que volta — o teste falharia sem nada estar errado.
+	d := NewDelegateSandboxed(dir, dir+"/anthropic.env", NewSandbox(""),
+		WithRunners(&fakeResolver{cmd: []string{"printenv", "OPENAI_API_KEY"}, envFile: "openai.env"}))
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"x","runner":"codex"}`)
+	if err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if !strings.Contains(result.Output, "do-codex") {
+		t.Errorf("a credencial do runner devia ter chegado: %s", result.Output)
+	}
+
+	// E a do PADRÃO não pode estar no ambiente dele: `printenv` sai com código
+	// diferente de zero quando a variável não existe, e é isso que se espera.
+	leakProbe := NewDelegateSandboxed(dir, dir+"/anthropic.env", NewSandbox(""),
+		WithRunners(&fakeResolver{cmd: []string{"printenv", "ANTHROPIC_API_KEY"}, envFile: "openai.env"}))
+	leak, _ := leakProbe.Execute(context.Background(), 1, `{"task":"x","runner":"codex"}`)
+	if strings.Contains(leak.Output, "do-claude") {
+		t.Errorf("a credencial do PADRÃO vazou para o runner: %s", leak.Output)
+	}
+}
+
+// Runner SEM credencial própria usa a do padrão — o outro sentido.
+func TestRunnerWithoutOwnCredentialFallsBackToDefault(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/anthropic.env", []byte("ANTHROPIC_API_KEY=do-padrao\n"), 0o600); err != nil {
+		t.Fatalf("preparando: %v", err)
+	}
+	resolver := &fakeResolver{cmd: []string{"printenv", "ANTHROPIC_API_KEY"}} // envFile vazio
+	d := NewDelegateSandboxed(dir, dir+"/anthropic.env", NewSandbox(""), WithRunners(resolver))
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"x","runner":"algum"}`)
+	if err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if !strings.Contains(result.Output, "do-padrao") {
+		t.Errorf("sem credencial própria, devia usar a do padrão: %s", result.Output)
+	}
+}
+
+// Runner cadastrado com credencial que NÃO existe falha dizendo qual arquivo.
+func TestMissingRunnerCredentialNamesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(dir+"/anthropic.env", []byte("ANTHROPIC_API_KEY=x\n"), 0o600)
+	resolver := &fakeResolver{cmd: []string{"printenv", "X"}, envFile: "nunca-criado.env"}
+	d := NewDelegateSandboxed(dir, dir+"/anthropic.env", NewSandbox(""), WithRunners(resolver))
+
+	result, err := d.Execute(context.Background(), 1, `{"task":"x","runner":"codex"}`)
+	if err != nil {
+		t.Fatalf("não devia virar erro de execução: %v", err)
+	}
+	if !result.Failed {
+		t.Fatal("credencial ausente devia marcar falha")
+	}
+	if !strings.Contains(result.Output, "nunca-criado.env") {
+		t.Errorf("a mensagem devia nomear o arquivo: %s", result.Output)
 	}
 }

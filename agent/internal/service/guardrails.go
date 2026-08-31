@@ -244,13 +244,25 @@ func checkToolLoop(name, arguments, errText string, repeats int) *GuardrailHit {
 	return &GuardrailHit{
 		Kind: GuardrailToolLoop,
 		Detail: fmt.Sprintf(
-			"a ferramenta %s falhou %d vezes seguidas com os mesmos argumentos: %s",
-			name, repeats, trimmed),
+			"a ferramenta %s falhou %s com os mesmos argumentos: %s",
+			name, repeatPhrase(repeats), trimmed),
 		Lesson: fmt.Sprintf(
-			"A ferramenta %s falhou %d vezes com argumentos idênticos (%s). "+
+			"A ferramenta %s falhou %s com argumentos idênticos (%s). "+
 				"Repetir a mesma chamada não muda o resultado — mude os argumentos ou o caminho.",
-			name, repeats, trimmed),
+			name, repeatPhrase(repeats), trimmed),
 	}
+}
+
+// repeatPhrase concorda o número com o substantivo em português.
+//
+// Com o teto baixado por variável de ambiente — que é como a suíte prova o
+// detector — a mensagem sai com 1, e "falhou 1 vezes seguidas" acaba colada em
+// acompanhamento e relatório. O texto do bloqueio é lido por gente.
+func repeatPhrase(repeats int) string {
+	if repeats == 1 {
+		return "1 vez seguida"
+	}
+	return fmt.Sprintf("%d vezes seguidas", repeats)
 }
 
 // checkWallClock testa a fração do tempo consumida.

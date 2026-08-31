@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -59,6 +60,15 @@ type Runner struct {
 	Stdin bool `json:"stdin"`
 	// Description aparece na mensagem de erro quando o runner não existe.
 	Description string `json:"description"`
+	// EnvFile é o arquivo de credencial DESTE runner, relativo ao diretório de
+	// estado. Vazio usa o padrão do agente de código.
+	//
+	// Existe porque credencial não se compartilha entre fornecedores: um arquivo
+	// só servindo a todos daria ao Claude Code a chave da OpenAI e ao Codex a da
+	// Anthropic. Nenhum precisa da do outro — e um agente de código executa
+	// comando arbitrário por desenho, então a chave que ele alcança é a chave que
+	// pode sair da máquina.
+	EnvFile string `json:"env_file"`
 }
 
 // Catalog é o conjunto fechado de runners disponíveis.
@@ -153,6 +163,25 @@ func (c *Catalog) Names() []string {
 //  1. nome fora do catálogo: lista o que existe;
 //  2. binário ausente na máquina: nomeia o binário que falta;
 //  3. catálogo vazio: diz que nenhum runner foi cadastrado.
+
+// EnvFileFor devolve o NOME do arquivo de credencial de um runner, ou vazio.
+//
+// Vazio significa "use o padrão", e não "sem credencial": quem chama decide qual
+// é o padrão, porque o caminho depende do diretório de estado, que este pacote
+// não conhece.
+//
+// `filepath.Base` confina ao diretório de credenciais. O catálogo é escrito pelo
+// operador, mas um `../../etc/agentd/vault.pass` ali entregaria a senha do cofre
+// a um agente de código — e um deles executa comando arbitrário.
+func (c *Catalog) EnvFileFor(name string) string {
+	runner, ok := c.runners[name]
+	if !ok || runner.EnvFile == "" {
+		return ""
+	}
+	return filepath.Base(runner.EnvFile)
+}
+
+// Resolve devolve o comando pronto, conforme descrito acima.
 func (c *Catalog) Resolve(name, promptPath string) ([]string, bool, error) {
 	if len(c.runners) == 0 {
 		return nil, false, fmt.Errorf("%w: nenhum runner cadastrado nesta máquina", ErrUnknownRunner)

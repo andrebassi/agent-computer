@@ -307,3 +307,5 @@ task validate          # units, telas, e o estado montado do volume
 A seção 1 do `guardrails-test` afirma dono e modo de cada arquivo de memória, e
 a seção 2 prova que o usuário do modelo **não** consegue escrever neles. É a
 verificação que transforma esta tabela em fato.
+
+> Para ver **onde estes detectores entram no percurso de uma tarefa** — do pedido ao arquivo gravado —, leia [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md).

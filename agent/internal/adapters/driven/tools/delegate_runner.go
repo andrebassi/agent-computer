@@ -22,6 +22,8 @@ type RunnerResolver interface {
 	Resolve(name, promptPath string) ([]string, bool, error)
 	// Names lista o que está cadastrado, para a mensagem de erro.
 	Names() []string
+	// EnvFileFor devolve o arquivo de credencial do runner, ou vazio para o padrão.
+	EnvFileFor(name string) string
 }
 
 // WithRunners liga a delegação a um catálogo de agentes alternativos.
@@ -51,6 +53,24 @@ func (d *Delegate) runAlternate(ctx context.Context, args delegateArgs, env []st
 		}, nil
 	}
 
+	// Credencial DESTE runner, não a do padrão.
+	//
+	// Sem isto, o mesmo arquivo iria para todos: o Codex receberia a chave da
+	// Anthropic e o Claude Code a da OpenAI. Nenhum precisa da do outro, e um
+	// agente de código executa comando arbitrário por desenho — a chave que ele
+	// alcança é a chave que pode sair da máquina.
+	if named := d.runners.EnvFileFor(args.Runner); named != "" {
+		own, readErr := readEnvFile(filepath.Join(filepath.Dir(d.envFile), named))
+		if readErr != nil {
+			return &ports.ToolResult{
+				Output: fmt.Sprintf("o runner %q está cadastrado mas sem credencial (%s): %v",
+					args.Runner, named, readErr),
+				Failed: true,
+			}, nil
+		}
+		env = own
+	}
+
 	promptFile, cleanup, err := writePromptFile(args.Task)
 	if err != nil {
 		return &ports.ToolResult{
@@ -68,9 +88,55 @@ func (d *Delegate) runAlternate(ctx context.Context, args delegateArgs, env []st
 		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 	}
 
-	cmd := d.sandbox.Command(ctx, argv[0], argv[1:]...)
+	// HOME PRÓPRIO por runner, e criado antes de rodar.
+	//
+	// Sem isto o CLI escreve na casa de quem chamou. Medido em 31/08/2026: o
+	// Codex tentou `/root/.codex/config.toml` e falhou com "Permission denied" —
+	// o processo é rebaixado para `agent`, que não escreve em /root, e o CLI não
+	// tinha para onde ir.
+	//
+	// Um diretório por runner, e não um compartilhado: cada CLI guarda sessão,
+	// cache e às vezes credencial no HOME, e misturá-los faria a configuração de
+	// um aparecer para o outro.
+	home := filepath.Join(filepath.Dir(d.envFile), "runner-home", args.Runner)
+	// 0770, e não 0700: quem cria é o `agentd` e quem escreve é o `agent`. O
+	// diretório pai tem setgid, então o filho herda o grupo `agent` — sem os dois
+	// juntos o CLI leva "permission denied" num diretório que existe.
+	if err := os.MkdirAll(home, 0o770); err != nil {
+		return &ports.ToolResult{
+			Output: fmt.Sprintf("não consegui preparar o diretório do runner %q: %v", args.Runner, err),
+			Failed: true,
+		}, nil
+	}
+	// Chmod DEPOIS do MkdirAll, e não é redundante: `MkdirAll` aplica o umask do
+	// processo, e com o umask usual (022) o 0770 vira 0750 — o grupo perde a
+	// escrita justamente para o usuário que vai rodar o CLI.
+	//
+	// O sintoma foi "EACCES: permission denied, mkdir .../opencode/.local", com o
+	// diretório pai existindo e aparentemente correto.
+	if err := os.Chmod(home, 0o770); err != nil {
+		return &ports.ToolResult{
+			Output: fmt.Sprintf("não consegui ajustar o diretório do runner %q: %v", args.Runner, err),
+			Failed: true,
+		}, nil
+	}
+
+	// As variáveis que ESTE runner precisa atravessarem o sudo. Só elas: a
+	// credencial de um runner não tem por que chegar a outro.
+	names := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if idx := strings.Index(entry, "="); idx > 0 {
+			names = append(names, entry[:idx])
+		}
+	}
+	names = append(names, "HOME", "XDG_CONFIG_HOME")
+
+	cmd := d.sandbox.CommandPreserving(ctx, names, argv[0], argv[1:]...)
 	cmd.Dir = d.workdir
-	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+d.configDir)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"CLAUDE_CONFIG_DIR="+d.configDir)
 	cmd.Env = append(cmd.Env, env...)
 	if useStdin {
 		cmd.Stdin = strings.NewReader(args.Task)

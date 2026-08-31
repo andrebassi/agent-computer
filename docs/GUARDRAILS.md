@@ -167,10 +167,16 @@ qualquer entrada cujo binário seja um interpretador (`sh`, `bash`, `env`,
 `xargs`). O motivo é concreto: com shell no meio voltam `;`, `&&` e `$(...)`, e
 com eles `sudo` — que desfaz o rebaixamento do modelo para o usuário `agent`.
 
-Cadastrados: `claude` (instalado), `codex`, `droid`, `opencode`, `kiro`. Os
-quatro últimos ficam no catálogo antes de existirem na máquina de propósito —
-pedir um deles falha **nomeando o binário que falta**, o que é melhor
-documentação de instalação que uma lista em outro arquivo.
+Cadastrados: `claude` e `opencode` **funcionando** (provados na máquina),
+`codex` instalado mas sem acesso ao endpoint que o CLI usa, e `droid`/`kiro` não
+instalados. O estado de cada um está em [`EXTENDING.md`](EXTENDING.md).
+
+Os não instalados ficam no catálogo de propósito — pedir um deles falha
+**nomeando o binário que falta**, e a mensagem vira a documentação de instalação.
+
+Cada runner tem a **sua** credencial (`env_file`) e o **seu** `HOME`: um agente
+de código executa comando arbitrário por desenho, e a chave que ele alcança é a
+chave que pode sair da máquina.
 
 O prompt viaja em **arquivo** 0600, não em argumento: argumento é visível em
 `ps` para qualquer usuário da máquina, inclusive o do modelo.
@@ -259,6 +265,8 @@ com o arquivo em 0 bytes na máquina.
 
 O caso que fechou isso passa pelo `Execute` de verdade e confere que a
 requisição **não saiu**: `TestValidationIsWiredIntoTheTool`.
+
+> Para ver **onde estes detectores entram no percurso de uma tarefa** — do pedido ao arquivo gravado —, leia [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md).
 
 ## O que continua de fora
 

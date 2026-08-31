@@ -223,6 +223,35 @@ delegate_to_code {"task": "...", "runner": "codex"}
 
 Sem `runner`, é o Claude Code — e nada do que já estava testado muda.
 
+### Estado real de cada runner (31/08/2026)
+
+| Runner | Instalado | Funciona | Observação |
+|---|---|---|---|
+| `claude` | ✅ | ✅ | exercitado pela suíte; credencial em `anthropic.env` |
+| `opencode` | ✅ | ✅ | via OpenRouter, com modelo fixado em `--model` |
+| `codex` | ✅ | ❌ | o CLI usa `/v1/responses`, e a chave de API não tem acesso — ele espera login de conta ChatGPT |
+| `droid` | ❌ | — | não está no npm; instalação só por script próprio da Factory |
+| `kiro` | ❌ | — | é IDE da AWS, sem CLI headless conhecido |
+
+Os três últimos ficam **cadastrados de propósito**: pedir um deles falha com a
+mensagem exata do que falta, e a mensagem vira a documentação de instalação.
+
+⚠️ **O `opencode` precisa de `--model` explícito.** Sem ele, escolhe sozinho — e
+escolheu `gemini-3-pro-image-preview`, um modelo de imagem, falhando com "No
+endpoints found that support tool use". Um agente de código sem chamada de
+ferramenta não faz nada.
+
+### Cada runner tem a SUA credencial
+
+`env_file` no catálogo. Sem isso o mesmo arquivo iria para todos — o Codex
+receberia a chave da Anthropic e o Claude Code a da OpenAI. Nenhum precisa da do
+outro, e um agente de código executa comando arbitrário por desenho: a chave que
+ele alcança é a chave que pode sair da máquina.
+
+E cada um ganha um `HOME` próprio em `/workspace/agent/runner-home/<runner>`,
+porque CLI guarda config, cache e sessão na casa do usuário — misturá-los faria
+a configuração de um aparecer para o outro.
+
 ### As três recusas, e por quê
 
 | Recusa | Motivo |
@@ -248,3 +277,5 @@ E a regra que vale para os três: **teste contra o alvo real antes de entregar a
 modelo.** Conector que devolve 403, habilidade com comando errado e runner não
 instalado falham de formas que parecem defeito do agente — e o diagnóstico vai
 para o lugar errado.
+
+> Para ver **onde estes detectores entram no percurso de uma tarefa** — do pedido ao arquivo gravado —, leia [`TASK-LIFECYCLE.md`](TASK-LIFECYCLE.md).

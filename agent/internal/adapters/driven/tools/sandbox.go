@@ -94,6 +94,24 @@ func currentUserName() string {
 //
 // `--` fecha as opções do sudo. Sem isso, um comando do modelo começando com
 // hífen seria interpretado como opção do próprio sudo.
+// CommandPreserving é o Command com variáveis EXTRAS atravessando o sudo.
+//
+// Existe para o runner alternativo: cada agente de código tem a sua credencial
+// (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, …), e `sudo --preserve-env` só deixa
+// passar o que está listado. Fixar todos os nomes aqui acoplaria o sandbox ao
+// catálogo — e cada runner novo exigiria editar este arquivo.
+//
+// Quem chama já leu o arquivo de credencial e sabe exatamente quais variáveis
+// aquele runner define. Preservar só essas é o mínimo necessário: a credencial
+// de um runner não atravessa para outro.
+func (s *Sandbox) CommandPreserving(ctx context.Context, extra []string, name string, args ...string) *exec.Cmd {
+	if !s.Enabled() || len(extra) == 0 {
+		return s.Command(ctx, name, args...)
+	}
+	widened := &Sandbox{user: s.user, preserved: append(append([]string{}, s.preserved...), extra...)}
+	return widened.Command(ctx, name, args...)
+}
+
 func (s *Sandbox) Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	if !s.Enabled() {
 		return exec.CommandContext(ctx, name, args...)

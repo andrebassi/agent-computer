@@ -312,6 +312,17 @@ in
     # `L+` substitui um link que ja exista, para o alvo acompanhar uma
     # reinstalacao do npm.
     "L+ /usr/local/bin/claude - - - - ${workspace}/npm/bin/claude"
+    # Os outros agentes de codigo, pelo mesmo caminho.
+    #
+    # `exec.LookPath` roda no contexto do agentd-api, cujo PATH nao inclui
+    # /workspace/npm/bin. Sem o link, o runner cadastrado falha com "precisa de
+    # <binario> no PATH" -- mensagem correta, mas para um binario que ESTA
+    # instalado, o que manda procurar no lugar errado.
+    #
+    # Link em vez de mexer no PATH da unidade: a unidade ja teve o PATH
+    # substituido por engano uma vez, e o npm quebrou com "enoent spawn sh".
+    "L+ /usr/local/bin/codex - - - - ${workspace}/npm/bin/codex"
+    "L+ /usr/local/bin/opencode - - - - ${workspace}/npm/bin/opencode"
 
     # Prefixo do npm no volume DURAVEL.
     #
@@ -416,6 +427,29 @@ in
       chmod g+w ${workspace}/agent/locks/*.lock 2>/dev/null || true
       chmod 2770 ${workspace}/agent/screens
 
+      # Casa dos agentes de codigo alternativos.
+      #
+      # Dono `agent`, e nao `agentd`: quem roda o CLI e o usuario rebaixado, e
+      # cada um deles quer escrever config, cache e sessao no HOME. Sem isto o
+      # Codex falhou com "Failed to read config file ... Permission denied" --
+      # o diretorio existia, criado pelo agentd, e o processo rebaixado nao
+      # escrevia nele.
+      #
+      # Um subdiretorio por runner: cada CLI guarda credencial e sessao no HOME,
+      # e misturar faria a configuracao de um aparecer para o outro.
+      mkdir -p ${workspace}/agent/runner-home
+      chown agentd:agent ${workspace}/agent/runner-home
+      # 2770: o `agentd` CRIA o subdiretorio de cada runner, e o `agent` ESCREVE
+      # dentro dele. Os dois precisam, e nenhum sozinho basta:
+      #
+      #   o agentd cria    porque e ele quem monta a chamada
+      #   o agent escreve  porque o CLI roda rebaixado, e guarda config no HOME
+      #
+      # O setgid (o 2) faz o subdiretorio herdar o grupo `agent`, sem o que o
+      # filho sairia com grupo `agentd` e o CLI voltaria a levar "permission
+      # denied" -- com o diretorio existindo, que e o diagnostico mais confuso.
+      chmod 2770 ${workspace}/agent/runner-home
+
       # Os quatro arquivos de memoria (guardrails, progresso, atividade, erros)
       # e o catalogo de runners.
       #
@@ -443,15 +477,18 @@ in
         cat > "${workspace}/agent/runners.json" <<'CATALOGO'
 {
   "claude": {"cmd": ["claude", "-p", "--dangerously-skip-permissions", "{prompt}"],
-             "description": "Claude Code (instalado)"},
+             "env_file": "anthropic.env",
+             "description": "Claude Code -- instalado e exercitado pela suite"},
   "codex":  {"cmd": ["codex", "exec", "--yolo", "--skip-git-repo-check", "-"],
-             "stdin": true, "description": "OpenAI Codex"},
+             "stdin": true, "env_file": "openai.env",
+             "description": "OpenAI Codex -- instalado"},
+  "opencode": {"cmd": ["opencode", "run", "--model", "openrouter/x-ai/grok-4.6", "{prompt}"],
+             "env_file": "openrouter.env",
+             "description": "OpenCode -- instalado, via OpenRouter"},
   "droid":  {"cmd": ["droid", "exec", "--skip-permissions-unsafe", "-f", "{prompt}"],
-             "description": "Factory Droid"},
-  "opencode": {"cmd": ["opencode", "run", "{prompt}"],
-             "description": "OpenCode"},
+             "description": "Factory Droid -- NAO instalado: nao esta no npm, so por script proprio"},
   "kiro":   {"cmd": ["kiro", "exec", "{prompt}"],
-             "description": "Kiro"}
+             "description": "Kiro -- NAO instalado: e IDE da AWS, sem CLI headless conhecido"}
 }
 CATALOGO
         chown agentd:agent "${workspace}/agent/runners.json"

@@ -281,6 +281,12 @@ tasks:
         load_token
         agent_ssh 'agent-status'
 
+  examples:
+    desc: 'Captura a saída REAL dos comandos que a doc promete (nenhum chama o modelo)'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/39-capture-examples.sh 2>&1 | tee logs/examples.log
+
   image-snapshot:
     desc: 'Fotografa o SISTEMA do droplet: a próxima criação pula os ~15 min de conversão'
     cmds:
