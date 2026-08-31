@@ -259,6 +259,7 @@ task validate         # 11 seções: units, telas, portas, boot
 | [`GUARDRAILS.md`](GUARDRAILS.md) | vai mexer nos limites, ou um deles disparou |
 | [`SECURITY.md`](SECURITY.md) | vai "endurecer" algo — leia **antes** |
 | [`STATE-FILES.md`](STATE-FILES.md) | precisa saber o que é um arquivo em `/workspace/agent` |
+| [`NOTIFICATIONS.md`](NOTIFICATIONS.md) | quer ser avisado quando o agente parar e pedir ajuda |
 | [`EXTENDING.md`](EXTENDING.md) | vai criar conector, habilidade ou runner |
 | [`TEST-MAP.md`](TEST-MAP.md) | quer saber se algo tem teste, e qual |
 | [`README.md`](../README.md) | está começando, ou quer o histórico das decisões |

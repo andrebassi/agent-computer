@@ -7,11 +7,17 @@
 # o modelo escolhendo para onde vao os proprios pedidos de socorro -- e apagar a
 # linha bastaria para ele trabalhar sem ninguem olhando.
 #
-# # Por que o topico e secreto
+# # O topico e PUBLICO, por escolha do dono
 #
-# No ntfy.sh qualquer um que saiba o topico LE e PUBLICA nele. O topico e a
-# unica credencial que existe, entao ele vive no pass (bassi/agent-computer/ntfy-url)
-# e nunca aparece em log, em argumento de comando ou nesta saida.
+# No ntfy.sh qualquer um que saiba o nome do topico LE tudo o que passa por ele e
+# PUBLICA nele. O topico em uso e `agent-computer` -- curto e adivinhavel, de
+# proposito: e o que deixa o canal utilizavel de qualquer lugar com um
+# `curl -d "texto" ntfy.sh/agent-computer`.
+#
+# A consequencia esta registrada e aceita: os avisos citam a tela, o motivo do
+# bloqueio e um trecho da tarefa, e um aviso FALSO pode aparecer ali. Fechar
+# depois nao exige trocar de ferramenta -- basta um nome longo e aleatorio, ou
+# ntfy com token; o campo AGENT_WEBHOOK aceita os dois sem mudanca de codigo.
 source "$(dirname "$0")/lib.sh"
 set -uo pipefail
 load_token

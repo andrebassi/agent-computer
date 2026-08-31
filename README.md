@@ -29,6 +29,7 @@ Lab — serve para testar o conceito, não para produção.
 | [Como usar, com um caso real](#como-usar-com-um-caso-real-do-começo-ao-fim) | **Comece por aqui se quer VER funcionando** |
 | [Receituário de exemplos](#receituário-exemplos-que-rodam) | **todo comando que dá para dar**, com o que volta de cada um |
 | [O percurso de uma tarefa](docs/TASK-LIFECYCLE.md) | **como as peças se encaixam** — do pedido ao arquivo gravado |
+| [Notificações com ntfy](docs/NOTIFICATIONS.md) | **fazer o agente te chamar** — passo a passo, do zero ao aviso no celular |
 | [Arquitetura ponta a ponta](#arquitetura-ponta-a-ponta) | o modelo explicado, as 12 cláusulas com código e prova |
 | [Auditoria de fidelidade](#auditoria-de-fidelidade-à-documentação) | placar do que existe e do que falta |
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
@@ -320,12 +321,16 @@ $ agentd -notify-drain
 vezes quiser. Com webhook, entrega e limpa — e só aí some.
 
 **A fila só sai da máquina com um destino configurado** — sem ele o agente
-enfileira o pedido de take-over e ninguém é avisado. O destino atual é o
-**ntfy.sh**, com o tópico secreto guardado em `bassi/agent-computer/ntfy-url`:
+enfileira o pedido de take-over e ninguém é avisado. O destino atual é
+`https://ntfy.sh/agent-computer`, guardado em `bassi/agent-computer/ntfy-url`:
 
 ```bash
 task notify-setup     # grava /etc/agentd/notify.env e prova a entrega ponta a ponta
+task notify-test      # e um aviso NASCIDO de uma tarefa real, da fila ao destino
 ```
+
+📖 **Passo a passo completo — instalar o app, escolher o tópico, ligar, testar e
+diagnosticar — em [`NOTIFICATIONS.md`](docs/NOTIFICATIONS.md).**
 
 Dois formatos, escolhidos por `AGENT_WEBHOOK_FORMAT`:
 
@@ -347,9 +352,16 @@ que importa se perde no meio.
 modelo escolhendo para onde vão os próprios pedidos de socorro — e apagar a
 linha bastaria para ele trabalhar sem ninguém olhando.
 
-⚠️ No ntfy quem sabe o tópico **lê e publica** nele. O tópico é a única
-credencial que existe, por isso vive no `pass` e nunca aparece em log, em
-argumento de comando ou na saída do script.
+⚠️ **O tópico `agent-computer` é público, por escolha do dono.** No ntfy quem
+sabe o nome do tópico lê tudo o que passa por ele **e publica nele** — então os
+avisos (que citam a tela, o motivo do bloqueio e um trecho da tarefa) são
+legíveis por qualquer um que adivinhe o nome, e um aviso falso pode aparecer ali.
+
+A troca é deliberada: o nome curto é o que torna o canal utilizável de qualquer
+lugar, com um `curl -d "texto" ntfy.sh/agent-computer`. Para fechar isso depois,
+duas saídas sem trocar de ferramenta: um nome longo e aleatório no lugar de
+`agent-computer`, ou `ntfy` com autenticação por token (o campo `AGENT_WEBHOOK`
+aceita as duas coisas sem mudança de código).
 
 E `agent-status`, que é o retrato da máquina:
 
