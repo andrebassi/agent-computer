@@ -158,6 +158,12 @@ func (s *Supervisor) Start(ctx context.Context, screenNumber int, prompt string)
 	if s.closed {
 		return nil, ErrShuttingDown
 	}
+	// A tela é validada ANTES da sonda de ocupação. A sonda toma a trava, e tomar
+	// a trava CRIA `screen-<n>.lock` — um pedido com tela 99999999 é recusado
+	// corretamente logo depois, mas deixa o arquivo no disco para sempre.
+	if err := domain.ValidateScreen(screenNumber); err != nil {
+		return nil, err
+	}
 	if err := s.screenIsFree(ctx, screenNumber); err != nil {
 		return nil, err
 	}

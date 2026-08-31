@@ -214,6 +214,45 @@ func TestHasSecretIsTrueWhenNoAuthNeeded(t *testing.T) {
 	}
 }
 
+// "não posso ver" é resposta DIFERENTE de "não existe".
+//
+// O diretório de segredos é fechado ao usuário do modelo, então quem pergunta de
+// fora do `agentd` recebe `permission denied` num arquivo que existe. Tratar isso
+// como ausência produz falso alarme na direção cara — manda consertar o intacto.
+func TestCheckSecretSeparatesUnreadableFromAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignora o bit de permissão; o caso não é observável")
+	}
+	r, dir := newRegistry(t)
+
+	if got := r.CheckSecret("github-token"); got != SecretMissing {
+		t.Errorf("sem o arquivo, devia ser SecretMissing, veio %v", got)
+	}
+	secrets := filepath.Join(dir, "secrets")
+	if err := os.MkdirAll(secrets, 0o700); err != nil {
+		t.Fatalf("criando o diretório: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(secrets, "github-token"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("gravando o segredo: %v", err)
+	}
+	if got := r.CheckSecret("github-token"); got != SecretPresent {
+		t.Errorf("com o arquivo legível, devia ser SecretPresent, veio %v", got)
+	}
+
+	// Fechar o DIRETÓRIO é o que reproduz a máquina: o arquivo continua lá, e o
+	// `stat` devolve permission denied em vez de "não existe".
+	if err := os.Chmod(secrets, 0o000); err != nil {
+		t.Fatalf("fechando o diretório: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(secrets, 0o700) })
+	if got := r.CheckSecret("github-token"); got != SecretUnknown {
+		t.Errorf("sem permissão de leitura, devia ser SecretUnknown, veio %v", got)
+	}
+	if got := r.CheckSecret(""); got != SecretNotRequired {
+		t.Errorf("conector sem autenticação devia ser SecretNotRequired, veio %v", got)
+	}
+}
+
 // Referência de segredo com subida de diretório não pode escapar da pasta de
 // credenciais — o manifesto pode vir de fora.
 func TestSecretPathCannotEscapeDirectory(t *testing.T) {

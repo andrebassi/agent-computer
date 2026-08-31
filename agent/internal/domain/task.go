@@ -151,6 +151,21 @@ type Task struct {
 	CompletionTokens int
 }
 
+// ValidateScreen recusa tela fora do intervalo que existe no systemd.
+//
+// É exportada, e não uma checagem embutida no `NewTask`, porque quem recebe o
+// pedido precisa reprovar a tela ANTES de sondar a trava: a sonda cria o arquivo
+// `screen-<n>.lock` e ele fica no disco para sempre. Medido em 31/08/2026, com o
+// diretório de travas guardando `screen--1.lock` e `screen-99999999.lock` de
+// pedidos que foram corretamente recusados depois — lixo que faz `ls locks/`
+// parecer haver mais tarefas do que existem.
+func ValidateScreen(screen int) error {
+	if screen < 1 || screen > 9 {
+		return fmt.Errorf("%w: tela %d fora do intervalo 1..9", ErrInvalidTask, screen)
+	}
+	return nil
+}
+
 // NewTask cria uma tarefa pendente. A tela é validada aqui porque uma tela fora
 // do intervalo não existe no systemd, e o erro só apareceria muito depois, na
 // forma de um serviço que não sobe.
@@ -158,8 +173,8 @@ func NewTask(id string, screen int, prompt string, now time.Time) (*Task, error)
 	if id == "" {
 		return nil, fmt.Errorf("%w: id da tarefa vazio", ErrInvalidTask)
 	}
-	if screen < 1 || screen > 9 {
-		return nil, fmt.Errorf("%w: tela %d fora do intervalo 1..9", ErrInvalidTask, screen)
+	if err := ValidateScreen(screen); err != nil {
+		return nil, err
 	}
 	if prompt == "" {
 		return nil, fmt.Errorf("%w: prompt vazio", ErrInvalidTask)

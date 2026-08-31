@@ -5,11 +5,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
 )
@@ -250,5 +252,49 @@ func waitIdle(t *testing.T, sup *Supervisor) {
 			t.Fatalf("ainda há %d tarefa(s) em voo", sup.Running())
 		case <-time.After(5 * time.Millisecond):
 		}
+	}
+}
+
+// Tela fora do intervalo NÃO deixa arquivo de trava no disco.
+//
+// A sonda de ocupação toma a trava, e tomar a trava CRIA o arquivo. Com a
+// validação depois da sonda, um pedido de tela 99999999 era corretamente
+// recusado e mesmo assim deixava `screen-99999999.lock` para sempre — medido em
+// 31/08/2026, com o diretório guardando também `screen--1.lock`.
+//
+// O teste usa a trava REAL, e não um dublê: o defeito é o arquivo em disco, e um
+// dublê não teria arquivo nenhum para conferir.
+func TestInvalidScreenLeavesNoLockFile(t *testing.T) {
+	dir := t.TempDir()
+	realLock, err := lock.NewFileLock(dir)
+	if err != nil {
+		t.Fatalf("montando a trava: %v", err)
+	}
+	sup, _ := newSupervisor(t, &fakeRunner{}, newFakeStore(), realLock)
+
+	for _, screen := range []int{-1, 0, 10, 99999999} {
+		if _, err := sup.Start(context.Background(), screen, "faça algo"); err == nil {
+			t.Fatalf("tela %d devia ser recusada", screen)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("lendo o diretório: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("tela inválida não devia criar arquivo: %v", names)
+	}
+
+	// O outro sentido: tela VÁLIDA continua criando a trava. Sem isto, uma
+	// validação que recusasse tudo passaria neste teste.
+	if _, err := sup.Start(context.Background(), 1, "faça algo"); err != nil {
+		t.Fatalf("tela válida devia ser aceita: %v", err)
+	}
+	if _, err := os.Stat(dir + "/screen-1.lock"); err != nil {
+		t.Errorf("a tela válida devia ter criado a trava: %v", err)
 	}
 }

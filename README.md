@@ -319,6 +319,19 @@ $ agentd -notify-drain
 ⚠️ `-notify-drain` **sem `-webhook` não consome** a fila: dá para olhar quantas
 vezes quiser. Com webhook, entrega e limpa — e só aí some.
 
+**A fila só sai da máquina com um destino configurado.** Sem ele o agente
+enfileira o pedido de take-over e ninguém é avisado — hoje há 39 avisos parados
+assim:
+
+```bash
+ssh root@<maquina> 'echo "AGENT_WEBHOOK=https://seu-destino/hook" > /etc/agentd/notify.env'
+ssh root@<maquina> 'systemctl start agentd-notify'   # o timer já roda a cada 5 min
+```
+
+⚠️ O arquivo fica em `/etc/agentd/`, **fora de `/workspace`**: o destino dos
+avisos num diretório que o modelo alcança seria o modelo escolhendo para onde
+vão os próprios pedidos de socorro.
+
 E `agent-status`, que é o retrato da máquina:
 
 ```
@@ -3407,7 +3420,7 @@ Detalhes que importam em cada uma:
 | `RequiresMountsFor=/workspace` | sem isto o systemd sobe o serviço antes da montagem, e ele falha lendo um diretório vazio |
 | `TimeoutStopSec=40` | o encerramento limpo cancela as tarefas em voo, elas gravam o estado e soltam a trava — 40 s dá folga antes do SIGKILL |
 | `Restart=on-failure` | e não `always`: um serviço que sai limpo saiu por decisão |
-| `EnvironmentFile=-/workspace/agent/notify.env` | o `-` torna opcional; sem destino, o drenador só lista |
+| `EnvironmentFile=-/etc/agentd/notify.env` | o `-` torna opcional; sem destino, o drenador só lista. **Fora de `/workspace`** de propósito: o destino dos avisos não pode ficar num diretório que o modelo alcança |
 | `AccuracySec=10s` no timer | sem isto, um drenador lento acumularia execuções sobrepostas disputando a mesma fila |
 
 **Nenhuma é habilitada por padrão.** A porta exige as duas credenciais

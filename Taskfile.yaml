@@ -287,6 +287,12 @@ tasks:
       - mkdir -p logs
       - ./scripts/39-capture-examples.sh 2>&1 | tee logs/examples.log
 
+  pending:
+    desc: 'Levanta o que ainda falta, perguntando à máquina em vez de à memória'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/40-pending-audit.sh 2>&1 | tee logs/pending.log
+
   image-snapshot:
     desc: 'Fotografa o SISTEMA do droplet: a próxima criação pula os ~15 min de conversão'
     cmds:

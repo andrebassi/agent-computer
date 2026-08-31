@@ -101,9 +101,15 @@ func listCatalog(registry *connectors.Registry, skillStore *skills.Store) error 
 	for _, c := range installed {
 		auth := "sem autenticação"
 		if c.RequiresAuth() {
-			if registry.HasSecret(c.SecretRef) {
+			// "não posso ver" NÃO é "não existe": o diretório de segredos é
+			// fechado ao usuário do modelo de propósito, e chamar isso de
+			// credencial faltando manda consertar o que está intacto.
+			switch registry.CheckSecret(c.SecretRef) {
+			case connectors.SecretPresent:
 				auth = "credencial configurada"
-			} else {
+			case connectors.SecretUnknown:
+				auth = "credencial fora do seu alcance (esperado fora do usuário agentd)"
+			default:
 				auth = "⚠️  CREDENCIAL FALTANDO — agentd -catalog secret " + c.SecretRef
 			}
 		}

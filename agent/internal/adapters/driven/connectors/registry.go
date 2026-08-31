@@ -416,6 +416,46 @@ func (r *Registry) HasSecret(ref string) bool {
 	return err == nil
 }
 
+// SecretStatus diz o que se sabe sobre a credencial de um conector.
+type SecretStatus int
+
+const (
+	// SecretNotRequired marca conector que dispensa credencial.
+	SecretNotRequired SecretStatus = iota
+	// SecretPresent marca credencial encontrada e legível.
+	SecretPresent
+	// SecretMissing marca credencial que de fato não existe.
+	SecretMissing
+	// SecretUnknown marca credencial que pode existir, mas está fora do alcance
+	// de quem perguntou.
+	SecretUnknown
+)
+
+// CheckSecret separa "não existe" de "não posso ver".
+//
+// O diretório de segredos é `agentd:agentd 0700`, então o usuário do modelo
+// recebe `permission denied` num arquivo que existe. Tratar isso como ausência é
+// falso alarme na direção mais cara: manda consertar o que está intacto.
+//
+// Medido em 31/08/2026: o passo 6 do deploy roda `-catalog list` como `agent` e
+// imprimia "⚠️ CREDENCIAL FALTANDO" para um token gravado e funcionando, a cada
+// implantação — enquanto a permissão restritiva era justamente a contenção
+// operando como projetada.
+func (r *Registry) CheckSecret(ref string) SecretStatus {
+	if ref == "" {
+		return SecretNotRequired
+	}
+	_, err := os.Stat(r.secretPath(ref))
+	switch {
+	case err == nil:
+		return SecretPresent
+	case os.IsPermission(err):
+		return SecretUnknown
+	default:
+		return SecretMissing
+	}
+}
+
 // toDomainOps converte operações do manifesto para o domínio.
 func toDomainOps(ops []ManifestOperation) []domain.ConnectorOperation {
 	out := make([]domain.ConnectorOperation, 0, len(ops))
