@@ -238,6 +238,44 @@ A suíte roda **duas vezes seguidas** por convenção do repositório: teste que
 mexe em processo deixa estado atrás, e uma execução só prova que ele passa numa
 máquina limpa — que é o estado em que ele nunca vai rodar de novo.
 
+### Antes de instalar: o gate de viabilidade
+
+`scripts/43-ebpf-feasibility.sh` (`task ebpf:gate`) pergunta à máquina se ela
+suporta o coletor, em vez de descobrir no meio do deploy: versão de kernel, BTF
+em `/sys/kernel/btf/vmlinux`, `tracefs` montado, e a presença de **cada
+tracepoint** que os programas anexam.
+
+O último item é o que envelhece. Tracepoint é contrato estável, mas contrato
+some entre versões maiores, e a falha seria no `Attach` — em tempo de execução,
+na máquina, longe de quem editou. O gate a antecipa.
+
+O gate exige **nove** tracepoints, e não os dois que os programas usam hoje:
+
+```
+sched/sched_process_exec   sched/sched_process_fork   sched/sched_process_exit
+sock/inet_sock_set_state   syscalls/sys_enter_connect syscalls/sys_exit_connect
+signal/signal_generate     oom/mark_victim            syscalls/sys_enter_openat
+```
+
+Os sete a mais são os das **próximas probes** (seção final). Medir agora custa
+uma leitura de diretório e responde antes de alguém escrever o código: se um
+kernel futuro deixar de expor `oom/mark_victim`, isso aparece no gate, e não no
+meio da implementação. O preço é que o gate reprova uma máquina onde o coletor
+atual funcionaria — aceito de propósito, porque a máquina é sempre a mesma e o
+falso verde custa mais que o falso vermelho.
+
+A lista é ajustável por ambiente, e isso não é conveniência:
+
+| Variável | Padrão | Para quê |
+|---|---|---|
+| `EBPF_TRACEPOINTS` | os nove acima | os hooks exigidos |
+
+É o que torna a **prova de falha** possível (`task ebpf:gate:proof`): apontando a
+variável para um tracepoint que não existe, o gate tem de reprovar; com a lista
+real, tem de aprovar. Sem os dois sentidos, um gate que aprovasse qualquer
+entrada pareceria saudável — e um gate que nunca reprovou provavelmente não é
+gate.
+
 ---
 
 ## 🛑 O buraco que nenhuma capacidade fecha
