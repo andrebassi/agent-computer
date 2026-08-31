@@ -751,6 +751,10 @@ $ AGENT_NETWORK=tailscale task route
 O modo entra na saída porque o endereço sozinho não distingue **escolhi a malha**
 de **caí nela** — em `auto` os dois imprimem o mesmo `100.x`.
 
+Fluxo completo — criar a authkey com as quatro opções certas, provisionar,
+verificar, e a tabela de sintoma → causa → o que fazer — em
+[`docs/NETWORK-ACCESS.md`](docs/NETWORK-ACCESS.md).
+
 `cloudflared` cobre o caso que a malha não cobre: alguém alcançar a tela **sem
 entrar no tailnet**. O preço é que o hostname é público e o tráfego passa pela
 Cloudflare, então a política de Access na frente não é opcional.

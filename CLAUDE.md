@@ -56,6 +56,7 @@ cada:
 | `TEST-MAP.md` | que teste cobre que funcionalidade, e o que ele reprovaria |
 | `OBSERVABILITY.md` | as três camadas de observação, o que cada uma responde e o que ela não responde |
 | `KERNEL-VISIBILITY.md` | o que o kernel vê do que o modelo faz, e como sei que ele está vendo |
+| `NETWORK-ACCESS.md` | por onde se alcança a máquina, e como saber qual caminho está em uso |
 
 `examples/` traz o que já foi capturado rodando de verdade: quatro conectores
 (`github.json`, `gitlab.yaml`, `cloudflare.yaml`, `digitalocean.yaml`) e três
