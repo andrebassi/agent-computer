@@ -237,6 +237,14 @@ in
   # `z` em vez de `d` onde o diretorio ja existe no volume preservado: `d` so
   # cria, `z` tambem corrige dono e modo do que veio de uma versao anterior.
   systemd.tmpfiles.rules = [
+    # Config do coletor eBPF, em /etc e NUNCA em /workspace.
+    #
+    # E o achado 3 da revisao aplicado antes de o defeito existir: um
+    # EnvironmentFile em caminho gravavel pelo modelo foi a escalada que
+    # desligou o rebaixamento das ferramentas. Aqui o modelo nao alcanca o
+    # arquivo, e o binario o le sozinho -- sem shell na unidade (achado 4).
+    "d /etc/agent-probe 0755 root root -"
+    "f /etc/agent-probe/sink.url 0644 root root -"
     # O efemero declarado, para a fronteira duravel x descartavel existir de fato.
     "d /scratch 1777 agent agent -"
 
@@ -782,6 +790,78 @@ PRECOS
       # parte da mesma expressao que cria a unidade.
       AGENTD_TOOL_USER = "agent";
       PATH = lib.mkForce "/run/current-system/sw/bin:${workspace}/npm/bin";
+    };
+  };
+
+  # Coletor eBPF: registra no kernel o que o modelo executa.
+  #
+  # E a camada que o agentd instrumentado nao consegue ser. O agente sabe a
+  # INTENCAO e e cego ao que o sistema fez; esta sabe o FATO e e cega a
+  # intencao. So esta vale como PROVA, porque roda no kernel e o usuario `agent`
+  # nao a desliga.
+  #
+  # O NOME e decisao de seguranca: `agent-probe`, nunca `agentd-probe`. O
+  # sudoers concede ao `agent` -- logo ao modelo -- `pkill -9 -f agentd*`, e o
+  # segundo nome casaria com esse padrao. Pelo mesmo motivo esta unidade fica
+  # FORA das duas cujo journal o `agent` pode ler: o auditado nao le o log da
+  # auditoria.
+  systemd.services.agent-probe = {
+    description = "agent computer - coletor eBPF (somente observacao)";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    # `wantedBy` EXPLICITO. A falta desta linha no agentd-api deixou o servico
+    # 26 minutos fora do ar depois de um reboot, sem nenhuma unidade em falha.
+    # Num coletor de auditoria o mesmo defeito e pior: ele nao coleta, e nada
+    # aponta para isso.
+    wantedBy = [ "multi-user.target" ];
+    # SEM RequiresMountsFor=/workspace, de proposito: o coletor nao grava no
+    # volume. Amarra-lo a montagem o faria depender do que ele observa.
+
+    serviceConfig = {
+      # User=root, e a decisao foi MEDIDA, nao presumida.
+      #
+      # O `cilium/ebpf` atacha tracepoint por `perf_event_open`, e o id do
+      # tracepoint vem de LER /sys/kernel/tracing/events/<g>/<n>/id. Nesta
+      # maquina esse diretorio e 700 root:root, e o usuario `agent` recebe
+      # "Permission denied" (medido em 31/08/2026). Isso e checagem de DAC, nao
+      # de capacidade: CAP_PERFMON nao abre arquivo sem permissao.
+      #
+      # A alternativa seria um usuario proprio com CAP_DAC_READ_SEARCH -- que le
+      # QUALQUER arquivo da maquina, inclusive /etc/agentd/vault.pass. Os dois
+      # leem tudo; so um admite. Root com bounding set apertado e o honesto.
+      User = "root";
+      CapabilityBoundingSet = [ "CAP_BPF" "CAP_PERFMON" "CAP_DAC_READ_SEARCH" ];
+      # Seguro AQUI, ao contrario do agentd-api: esta unidade nao usa sudo e nao
+      # executa nada alem do proprio binario.
+      NoNewPrivileges = true;
+
+      # SEM SHELL no ExecStart. E o achado 4 da revisao: o `sh -c` da unidade de
+      # avisos era injecao de comando.
+      ExecStart = "/usr/local/bin/agent-probe -sink-file /etc/agent-probe/sink.url";
+      Restart = "always";
+      RestartSec = 5;
+
+      # Teto de recurso: o coletor NUNCA pode ser a causa da degradacao que ele
+      # mede. Com 96M ele morre e reinicia em vez de comer a folga do Chrome.
+      MemoryMax = "96M";
+      CPUQuota = "15%";
+      Nice = 10;
+
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectKernelModules = true;
+      # ProtectControlGroups fica em FALSE: o coletor precisa ler /sys/fs/cgroup
+      # para traduzir o id numerico do cgroup em nome de unidade -- que e o que
+      # distingue o que o agentd disparou do que o Chrome disparou. Nesta
+      # maquina o uid NAO faz essa distincao: os dois rodam como `agent`.
+      ProtectControlGroups = false;
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      LockPersonality = true;
+      RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" "AF_NETLINK" ];
+      SystemCallArchitectures = "native";
     };
   };
 
