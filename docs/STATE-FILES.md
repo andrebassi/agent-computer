@@ -271,6 +271,32 @@ são recusadas com `unsafe path transition` — o dono muda de `agent` para
 `agentd` no meio do caminho — e **descartadas em silêncio**, sem falhar a
 unidade. Diretório novo aqui tem de nascer no oneshot.
 
+## As duas fotos, e por que ambas fazem falta
+
+| Foto | Guarda | Muda | Comando | Custo |
+|---|---|---|---|---|
+| **volume** | o trabalho — tarefas, conversas, cofre, habilidades | toda hora | `task snapshot` | US$ 0,06/GB/mês |
+| **imagem** | a máquina — sistema, unidades, usuários, binário | por deploy | `task image-snapshot` | US$ 0,57/mês (9,58 GiB) |
+
+Restaurar a **imagem sem o volume** dá uma máquina vazia e funcional; o **volume
+sem a imagem** dá o trabalho de volta numa máquina que ainda precisa ser montada.
+As duas juntas são a recuperação completa.
+
+A imagem existe para cortar os ~15 min de conversão para NixOS — o
+`nixos-infect` baixa 614 MB do cache do Nix, constrói o sistema, reescreve o
+boot e reinicia. Com ela:
+
+```bash
+task image-snapshot            # fotografa o sistema pronto
+DROPLET_IMAGE=<id> task up     # a próxima máquina nasce feita
+```
+
+⚠️ O droplet é **desligado** antes de fotografar. Snapshot de disco em uso
+captura um sistema de arquivos no meio de uma escrita, e o DigitalOcean avisa
+que o resultado pode ficar inconsistente — o pior tipo de defeito numa imagem
+base, porque só aparece na máquina que alguém criar depois, longe de onde a
+foto foi tirada.
+
 ## Como conferir tudo de uma vez
 
 ```bash

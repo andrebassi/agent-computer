@@ -10,6 +10,19 @@ DROPLET_NAME="${DROPLET_NAME:-agent-computer}"
 DROPLET_REGION="${DROPLET_REGION:-nyc3}"        # menor latência daqui entre as regiões DO
 DROPLET_SIZE="${DROPLET_SIZE:-s-2vcpu-4gb}"     # US$ 24,00/mês — 2 GB faz o Chrome estourar
 DROPLET_IMAGE="${DROPLET_IMAGE:-ubuntu-24-04-x64}"
+# Aceita também o ID de um SNAPSHOT DE DROPLET, tirado por
+# `scripts/38-image-snapshot.sh`. É como se pula a conversão para NixOS:
+#
+#   DROPLET_IMAGE=<id-do-snapshot> task up
+#
+# A máquina nasce no estado final — sistema, unidades, usuários e binário já
+# prontos —, em vez de nascer Ubuntu e levar ~15 min sendo convertida, com 614 MB
+# baixados do cache do Nix.
+#
+# ⚠️ A imagem guarda o SISTEMA; o volume guarda o TRABALHO. São duas fotos
+# diferentes e as duas fazem falta: a imagem sem o volume dá uma máquina vazia e
+# funcional, o volume sem a imagem dá o trabalho de volta numa máquina que ainda
+# precisa ser montada.
 SSH_KEY_ID="${SSH_KEY_ID:-55207659}"            # andrebassi-bb, única chave da conta
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/andrebassi-bb}"
 

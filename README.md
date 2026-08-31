@@ -346,6 +346,7 @@ integrado: uma tarefa do dia anterior derrubou tudo em cascata.
 | Droplet `s-2vcpu-4gb`, nyc3 | US$ 24,00/mês (US$ 0,03571/h) |
 | Volume durável 20 GB | US$ 2,00/mês |
 | Snapshot do volume | US$ 0,06/GB/mês |
+| Imagem do sistema (9,58 GiB) | US$ 0,57/mês — **opcional**, corta ~15 min de cada recriação |
 | **Total com droplet ligado** | **US$ 26,00/mês** |
 | **Só o estado, droplet destruído** | **US$ 2,00/mês** |
 | Cobrança | por segundo, mínimo 60 s |

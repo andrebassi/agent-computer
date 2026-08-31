@@ -281,6 +281,12 @@ tasks:
         load_token
         agent_ssh 'agent-status'
 
+  image-snapshot:
+    desc: 'Fotografa o SISTEMA do droplet: a próxima criação pula os ~15 min de conversão'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/38-image-snapshot.sh 2>&1 | tee logs/image-snapshot.log
+
   snapshot:
     desc: Snapshot do volume durável (base do RESET)
     cmds:
