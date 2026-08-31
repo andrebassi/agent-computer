@@ -192,8 +192,8 @@ func (d *Delegate) Spec() ports.ToolSpec {
 // Execute roda o Claude Code com a tarefa e devolve o relatório dele.
 func (d *Delegate) Execute(ctx context.Context, _ int, arguments string) (*ports.ToolResult, error) {
 	var args delegateArgs
-	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return &ports.ToolResult{Output: fmt.Sprintf("argumentos inválidos: %v", err), Failed: true}, nil
+	if err := decodeArgs(arguments, &args); err != nil {
+		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 	}
 	if strings.TrimSpace(args.Task) == "" {
 		return &ports.ToolResult{Output: "descreva a tarefa de código a delegar", Failed: true}, nil

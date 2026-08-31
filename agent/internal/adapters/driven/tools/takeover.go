@@ -3,7 +3,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -59,11 +58,8 @@ func (t *Takeover) Spec() ports.ToolSpec {
 // Execute converte o pedido do modelo num BlockRequest, que faz o laço parar.
 func (t *Takeover) Execute(_ context.Context, _ int, arguments string) (*ports.ToolResult, error) {
 	var args takeoverArgs
-	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return &ports.ToolResult{
-			Output: fmt.Sprintf("argumentos inválidos: %v", err),
-			Failed: true,
-		}, nil
+	if err := decodeArgs(arguments, &args); err != nil {
+		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 	}
 	reason := domain.BlockReason(args.Reason)
 	if !domain.ValidBlockReason(reason) {

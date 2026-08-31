@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -109,8 +108,8 @@ func (b *BrowserTool) Spec() ports.ToolSpec {
 func (b *BrowserTool) Execute(ctx context.Context, screen int, arguments string) (*ports.ToolResult, error) {
 	var args browserArgs
 	if arguments != "" && arguments != "{}" {
-		if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-			return &ports.ToolResult{Output: fmt.Sprintf("argumentos inválidos: %v", err), Failed: true}, nil
+		if err := decodeArgs(arguments, &args); err != nil {
+			return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 		}
 	}
 

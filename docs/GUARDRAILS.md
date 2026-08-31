@@ -219,8 +219,46 @@ task guardrails-test   # os detectores na máquina real
 A seção 8 é a outra direção: tarefa normal **não** dispara detector nenhum. Sem
 ela, um detector quebrado que bloqueasse tudo passaria em todas as demais.
 
+## Argumento do modelo: campo desconhecido é recusado
+
+Fechado em 31/08/2026. Havia duas portas, e as duas ignoravam em silêncio o que
+não conheciam.
+
+**Ferramentas nativas** (shell, browser, takeover, delegate) decodificavam com
+`json.Unmarshal`, que descarta campo desconhecido. Um `{"comand":"ls"}` — o erro
+de digitação que um modelo comete — decodificava sem erro, deixava o campo certo
+vazio, e a ferramenta respondia **"comando vazio"**. A mensagem mandava
+investigar a coisa errada, e o modelo tendia a repetir a chamada em vez de olhar
+o nome do campo. Agora usam `decodeArgs`, com `DisallowUnknownFields`.
+
+**Conector HTTP** é o caso mais grave, porque falha sem parecer falha: o que
+sobra depois de preencher o caminho vira **query string**. Um `{"stat":"opened"}`
+em vez de `state` não dava erro — era anexado à URL, a API remota o ignorava, e
+a listagem voltava **sem filtro, com todos os itens**. O modelo concluía que o
+filtro não funciona na API. Agora o parâmetro é conferido contra as `properties`
+que o manifesto declara, e a recusa lista os aceitos.
+
+Duas decisões que evitam o alarme falso:
+
+| | |
+|---|---|
+| esquema **sem** `properties` pula a validação | vazio é "não sei o que é válido", não "nada é válido" — recusar quebraria manifesto antigo |
+| esquema **malformado** não barra a chamada | quem o escreveu foi o operador; virar recusa que o MODELO recebe o faria gastar turnos consertando o que não alcança |
+
+Não se valida tipo nem obrigatoriedade: disso a API remota reclama, com mensagem
+melhor que a nossa. O que ela **não** tem como reclamar é do parâmetro que não
+conhece — ela o ignora. É essa lacuna, e só ela.
+
+### A prova de falha reprovou o TESTE, não o código
+
+Vale registrar porque é o modo de falha que este projeto já cometeu antes:
+desarmar `checkParams` no `httptool` deixava todos os casos passando, porque
+todos chamavam a função **direto**. Testar a função não prova que alguém a
+chama — foi assim que `RecordProgress` ficou escrito, testado e nunca invocado,
+com o arquivo em 0 bytes na máquina.
+
+O caso que fechou isso passa pelo `Execute` de verdade e confere que a
+requisição **não saiu**: `TestValidationIsWiredIntoTheTool`.
+
 ## O que continua de fora
 
-- **validação de argumento contra o `Schema`** anunciado ao modelo. Campo
-  desconhecido é ignorado em silêncio pelas ferramentas — o oposto do que a API
-  HTTP faz com `DisallowUnknownFields`.

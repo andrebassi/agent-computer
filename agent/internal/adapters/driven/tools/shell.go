@@ -3,7 +3,6 @@ package tools
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -81,8 +80,8 @@ func (s *Shell) Spec() ports.ToolSpec {
 // código de saída vai no texto, e o modelo decide o que fazer.
 func (s *Shell) Execute(ctx context.Context, _ int, arguments string) (*ports.ToolResult, error) {
 	var args shellArgs
-	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return &ports.ToolResult{Output: fmt.Sprintf("argumentos inválidos: %v", err), Failed: true}, nil
+	if err := decodeArgs(arguments, &args); err != nil {
+		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
 	}
 	if strings.TrimSpace(args.Command) == "" {
 		return &ports.ToolResult{Output: "comando vazio", Failed: true}, nil

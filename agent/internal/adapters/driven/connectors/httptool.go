@@ -105,6 +105,13 @@ func (h *httpTool) Execute(ctx context.Context, _ int, arguments string) (*ports
 		}
 	}
 
+	// Parâmetro não declarado vira query string e a API remota o ignora — o
+	// resultado volta certo em forma e errado em conteúdo. Recusar aqui devolve
+	// ao modelo a lista dos aceitos, e ele corrige na iteração seguinte.
+	if err := checkParams(declaredParams(h.operation.Schema), params); err != nil {
+		return &ports.ToolResult{Output: err.Error(), Failed: true}, nil
+	}
+
 	path, remaining := expandPath(h.operation.Path, params)
 	endpoint := h.baseURL + path
 
