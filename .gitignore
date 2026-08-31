@@ -7,3 +7,12 @@ agent/cover.out
 
 # Credenciais vivem no volume durável do droplet, nunca no repositório.
 **/anthropic.env
+
+# Estado do backend de observabilidade que roda no Mac: banco do Grafana,
+# blocos do Tempo, indice do VictoriaLogs. Apagar o diretorio e o "comecar
+# limpo" completo.
+data/
+
+# Objeto BPF compilado ao lado do fonte: sobra de compilação manual.
+# O que vale é probe/cmd/agent-probe/*.bpf.o, que o //go:embed consome.
+probe/internal/bpf/*.o

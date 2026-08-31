@@ -126,6 +126,96 @@ tasks:
     cmds:
       - ./scripts/coverage-gate.sh
 
+  ebpf:gate:
+    desc: 'Mede se a máquina suporta o coletor eBPF — kernel, BTF, tracefs, os hooks'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/43-ebpf-feasibility.sh 2>&1 | tee logs/ebpf-gate.log
+
+  ebpf:gate:proof:
+    desc: 'Prova de falha do gate de eBPF: com hook inexistente ele TEM que reprovar'
+    silent: true
+    cmds:
+      - mkdir -p logs
+      # Os dois sentidos, como manda a rule 13. Só o primeiro prova que o gate
+      # enxerga; só o segundo prova que ele não reprova tudo — checagem que
+      # recusa qualquer entrada é "segura" e inútil, e some no primeiro dia.
+      - |
+        # `set +e` porque aqui sair diferente de zero é o RESULTADO ESPERADO da
+        # primeira metade. Sem ele o Task aborta exatamente quando o gate está
+        # se comportando como devia, e a prova de falha vira falha da prova.
+        set +e
+        EBPF_TRACEPOINTS="sched/hook_that_does_not_exist" ./scripts/43-ebpf-feasibility.sh >/dev/null 2>&1
+        planted=$?
+        ./scripts/43-ebpf-feasibility.sh >/dev/null 2>&1
+        clean=$?
+        [ "$planted" -ne 0 ] || { echo "🛑 o gate NÃO reprovou com hook inexistente (rc=$planted)"; exit 1; }
+        echo "✅ com defeito plantado o gate reprova  (rc=$planted)"
+        [ "$clean" -eq 0 ] || { echo "🛑 o gate reprovou a máquina boa (rc=$clean)"; exit 1; }
+        echo "✅ sem defeito o gate aprova            (rc=$clean)"
+
+  probe:cov:
+    desc: 'Gate de cobertura do coletor eBPF (módulo probe/)'
+    dir: probe
+    cmds:
+      - ./scripts/coverage-gate.sh
+
+  probe:deploy:
+    desc: 'Compila o objeto BPF e o coletor, e instala na máquina por SSH de root'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/45-deploy-probe.sh 2>&1 | tee logs/probe-deploy.log
+
+  probe:test:
+    desc: 'Prova que o coletor eBPF vê o execve — com prova de falha nos dois sentidos'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/46-ebpf-test.sh 2>&1 | tee logs/probe-test.log
+
+  probe:run:
+    desc: 'Roda o coletor na máquina em primeiro plano, imprimindo cada execve'
+    silent: true
+    cmds:
+      - |
+        source ./scripts/lib.sh
+        set +e
+        load_token
+        echo "Ctrl+C para parar."
+        root_ssh '/usr/local/bin/agent-probe -verbose'
+
+  obs:up:
+    desc: 'Sobe o backend de observabilidade NO MAC — VictoriaTraces, VictoriaLogs, VictoriaMetrics, Grafana'
+    cmds:
+      - mkdir -p logs
+      # O token do pass evita o 403 de rate limit da API do GitHub ao resolver os
+      # inputs do flake. Sem ele, a primeira execução do dia costuma falhar.
+      - |
+        export NIX_CONFIG="access-tokens = github.com=$(pass show bassi/github/token 2>/dev/null | head -1)"
+        # -p 8099: a porta padrão da API do process-compose é a 8080, que é a
+        # mais disputada do laptop. Colidir com ela derruba a subida inteira com
+        # "address already in use", e o erro aponta para o supervisor em vez de
+        # apontar para quem realmente ocupou a porta.
+        nix run .#observability -- -p 8099
+
+  obs:status:
+    desc: 'Diz quais processos do backend estão de pé, perguntando a cada porta'
+    silent: true
+    cmds:
+      - |
+        for probe in "VictoriaTraces:10428:/health" "VictoriaMetrics:8428:/health" "VictoriaLogs:9428:/health" "Grafana:3000:/api/health"; do
+          name="${probe%%:*}"; rest="${probe#*:}"; port="${rest%%:*}"; path="${rest#*:}"
+          if curl -fsS --max-time 3 "http://127.0.0.1:${port}${path}" >/dev/null 2>&1; then
+            echo "  ✅ ${name} responde em 127.0.0.1:${port}"
+          else
+            echo "  🛑 ${name} não responde em 127.0.0.1:${port}"
+          fi
+        done
+
+  obs:open:
+    desc: 'Abre o Grafana no browser'
+    cmds:
+      - open http://127.0.0.1:3000
+
   lint:
     desc: 'Gate dos scripts: variável órfã (sobra de renomeação) e uso da API sem load_token'
     cmds:
@@ -170,7 +260,7 @@ tasks:
       - ./scripts/32-end-to-end.sh 2>&1 | tee logs/e2e.log
 
   suites:
-    desc: 'Roda as QUATRO suítes na máquina, em ordem, e falha se qualquer uma falhar'
+    desc: 'Roda as SEIS suítes na máquina, em ordem, e falha se qualquer uma falhar'
     cmds:
       - mkdir -p logs
       - ./scripts/08-validate.sh 2>&1 | tee logs/validate.log
@@ -226,7 +316,7 @@ tasks:
         agent_ssh 'journalctl -u agentd-api.service -n 60 --no-pager'
 
   deploy:
-    desc: Compila o agentd e o instala em /workspace — o gate de cobertura roda antes
+    desc: Compila o agentd e o instala em /usr/local/bin, por SSH de root — o gate de cobertura roda antes
     cmds:
       - mkdir -p logs
       - ./scripts/16-deploy-agent.sh 2>&1 | tee logs/deploy-agent.log
@@ -350,8 +440,15 @@ tasks:
         load_token
         echo "droplet $DROPLET_SIZE: US\$ 24,00/mes (US\$ 0,03571/h, cobranca por segundo)"
         echo
-        echo "snapshots (US\$ 0,06/GB/mes):"
-        doctl compute snapshot list --resource droplet --format Name,SizeGigaBytes 2>/dev/null | grep -E "Name|agent-computer" || echo "  nenhum"
+        # Duas consultas, e o erro do doctl fica VISIVEL de proposito: a versao
+        # anterior pedia a coluna inexistente `SizeGigaBytes`, mandava o erro
+        # para /dev/null e caia no "nenhum" -- reportando conta zerada com 7
+        # snapshots de 23,7 GiB no ar (medido em 31/08/2026, ~US$ 1,42/mes).
+        echo "snapshots de droplet (imagem do sistema):"
+        doctl compute snapshot list --resource droplet --format Name,Size,CreatedAt | grep -E "Name|agent-computer" || echo "  nenhum"
+        echo
+        echo "snapshots de volume (estado duravel):"
+        doctl compute snapshot list --resource volume --format Name,Size,CreatedAt | grep -E "Name|agent-computer" || echo "  nenhum"
 
   destroy:
     desc: Destrói o droplet (pede confirmação digitada)
