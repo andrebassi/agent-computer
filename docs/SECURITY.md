@@ -234,6 +234,41 @@ existe para evitar.
 
 ---
 
+## Fechado em 31/08/2026: a redação de segredo passou a existir de fato
+
+O mecanismo estava **inteiro e desligado**. `Redact` era chamado em toda
+mensagem, percorrendo uma lista que `TrackSecret` nunca preenchia — grep prova
+que só os testes o chamavam. Código escrito, testado em isolamento, e sem um
+único ponto de produção o armando. É o terceiro achado do mesmo padrão neste
+projeto, depois de `ToolResult.Failed` e de `RecordProgress`.
+
+Agora os segredos dos conectores **anexados** à tarefa são rastreados no ponto
+de composição, nos dois caminhos (porta HTTP e CLI), e rearmados na retomada —
+o campo é não-exportado para não ser serializado, então não volta do disco.
+
+### O caminho de vazamento que isso fecha
+
+Não é o modelo lendo o arquivo: `secrets/` é `drwx------ agentd`, e o teste
+confirma que ele recebe `Permission denied`.
+
+É a **API remota devolvendo o cabeçalho**. Acontece de verdade — endpoint de
+eco, mensagem de erro que cita o header recebido, resposta de depuração. Aí o
+segredo entra na saída da ferramenta, dali no histórico, e o histórico vai ao
+modelo em toda iteração seguinte **e** é gravado num volume que não expira.
+
+Provado em `task redaction-test`, com um conector apontado para um endpoint que
+ecoa cabeçalhos. A resposta gravada mostra:
+
+```json
+{"headers":{"x-segredo-de-teste":"[REDIGIDO]", ...}}
+```
+
+E a prova de falha, com os dois caminhos desarmados, traz o valor em claro.
+
+⚠️ **A prova de falha precisou desarmar OS DOIS pontos de composição.** Na
+primeira tentativa só o da porta HTTP foi desarmado, o teste usa o CLI, e o
+resultado verde parecia confirmar o mecanismo quando na verdade não o exercitava.
+
 ## O que continua aberto
 
 Registrado, não escondido.

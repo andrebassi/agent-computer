@@ -84,7 +84,9 @@ echo "4/5 suite sem trava (duas concorrentes se contaminam em silencio)"
 for f in scripts/08-validate.sh scripts/25-serve-integration-test.sh \
          scripts/27-privilege-test.sh scripts/32-end-to-end.sh \
          scripts/34-hostile-test.sh scripts/13-integration-test.sh \
-         scripts/17-delegation-test.sh scripts/21-web-search-test.sh; do
+         scripts/17-delegation-test.sh scripts/21-web-search-test.sh \
+         scripts/35-connector-ssrf-test.sh scripts/36-guardrails-test.sh \
+         scripts/37-redaction-test.sh; do
   [ -f "$f" ] || continue
   grep -qE '^[[:space:]]*suite_lock' "$f" || fail "$(basename "$f"): nao chama suite_lock"
 done

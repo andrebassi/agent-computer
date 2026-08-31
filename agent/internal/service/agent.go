@@ -58,6 +58,12 @@ type Agent struct {
 	// modelName é o que a tabela de preços usa como chave. Vazio faz todo
 	// modelo ficar sem preço, e portanto sem teto.
 	modelName string
+	// trackedSecrets são os valores a apagar do histórico se reaparecerem.
+	//
+	// Ficam SÓ em memória: o campo correspondente na conversa é não-exportado,
+	// e o struct de persistência é separado do de domínio justamente para eles
+	// não poderem ser serializados por descuido.
+	trackedSecrets []string
 }
 
 // discardSink é o destino padrão: descarta tudo.
@@ -111,6 +117,22 @@ func WithGuardrailJournal(journal GuardrailJournal) Option {
 		if journal != nil {
 			a.journal = journal
 		}
+	}
+}
+
+// WithTrackedSecrets arma a redação: estes valores somem do histórico.
+//
+// Sem isto a redação NUNCA rodava em produção — `TrackSecret` só era chamado
+// por teste, então `Redact` percorria uma lista vazia em toda mensagem. O
+// mecanismo existia inteiro e não protegia nada.
+//
+// O que se rastreia são os segredos dos conectores ANEXADOS à tarefa. É o
+// conjunto que o `agentd` de fato manipula enquanto ela roda, e o que pode
+// reaparecer numa saída de comando (`env`, um log da API que ecoa o cabeçalho)
+// ou no conteúdo de uma página.
+func WithTrackedSecrets(secrets []string) Option {
+	return func(a *Agent) {
+		a.trackedSecrets = append(a.trackedSecrets, secrets...)
 	}
 }
 
@@ -199,6 +221,11 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 		// As lições entram no prompt de sistema da conversa NOVA. Numa conversa
 		// carregada elas já estão lá, e reinjetá-las duplicaria o bloco.
 		conv = domain.NewConversation(task.ID, a.systemPromptWithLessons())
+		// Rastrear ANTES do primeiro AddUser: o pedido em si pode conter o
+		// segredo, e o que já entrou no histórico não é redigido depois.
+		for _, secret := range a.trackedSecrets {
+			conv.TrackSecret(secret)
+		}
 		conv.AddUser(task.Prompt)
 	}
 
@@ -485,6 +512,13 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 	}
 	if conv == nil {
 		return fmt.Errorf("conversa da tarefa %s não encontrada", task.ID)
+	}
+	// A conversa vem do disco, e os segredos NÃO vêm junto — o campo é
+	// não-exportado para não ser serializado. Rearmar aqui é o que impede a
+	// redação de sumir na retomada, que é justamente quando alguém acabou de
+	// digitar uma senha na tela.
+	for _, secret := range a.trackedSecrets {
+		conv.TrackSecret(secret)
 	}
 	resumeNote := humanNote
 	if resumeNote == "" {

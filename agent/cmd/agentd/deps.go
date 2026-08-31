@@ -224,7 +224,10 @@ func (d *deps) agentFactory() api.AgentFactory {
 			service.WithEventSink(d.sink),
 			service.WithGuardrailJournal(d.journal),
 			service.WithTaskBudget(d.taskBudget),
-			service.WithCostEstimator(d.prices, d.modelName))
+			service.WithCostEstimator(d.prices, d.modelName),
+			// Arma a redação com os segredos dos conectores ANEXADOS. Sem isto o
+			// mecanismo existia inteiro e percorria uma lista vazia.
+			service.WithTrackedSecrets(d.registry.SecretsFor(context.Background(), request.Connectors)))
 		return agent, finalPrompt, nil
 	}
 }

@@ -72,6 +72,7 @@ domínio e os adapters com dublê. **Não** cobrem fiação, permissão nem cami
 | **teto global de tarefas simultâneas** | `internal/adapters/driving/api` | 6 casos, com 429 pela porta HTTP |
 | **campo desconhecido recusado nas ferramentas** | `driven/tools` | 5 casos |
 | **parâmetro não declarado recusado no conector** | `driven/connectors` | 8 casos, com teste de FIAÇÃO |
+| **segredo de conector é redigido do histórico** | `37-redaction-test` | 5 seções, na máquina |
 | o custo por turno é medido, com cache separado | `36-guardrails-test` | 8c |
 | **a lição gravada chega ao prompt da tarefa seguinte** | `36-guardrails-test` | 6 |
 | o modelo não escreve os arquivos de memória | `36-guardrails-test` | 2 |
@@ -237,7 +238,7 @@ código lê o conteúdo, embora a documentação afirme o contrário.
 
 | Item | Por quê |
 |---|---|
-| `request_secret` (pedido de senha na tela) | precisa de terminal interativo; há teste em processo, não na máquina |
+| `request_secret` como ferramenta | **não existe, e é deliberado** — dar segredo ao modelo o gravaria num histórico que não expira. O take-over cobre o caso: a pessoa digita na tela |
 | `browser_fill` e `browser_click` isolados | exercitados de through pela delegação, não por teste próprio |
 | retenção de conversa | sem expurgo — **decisão aceita**, não pendência (o porquê está em `SECURITY.md`) |
 

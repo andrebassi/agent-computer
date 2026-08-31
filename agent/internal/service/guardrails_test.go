@@ -768,3 +768,119 @@ func TestCostIsReadableAtBothScales(t *testing.T) {
 		}
 	}
 }
+
+// O segredo rastreado SOME da saída de ferramenta que o histórico guarda.
+//
+// É o teste que arma o mecanismo: `Redact` existia inteiro e percorria uma
+// lista vazia em toda mensagem, porque `TrackSecret` só era chamado por teste.
+// O caminho de produção nunca redigiu nada.
+//
+// O valor de teste NÃO imita formato de credencial real de propósito: o gate de
+// segurança do repositório barra literal com cara de token, e ele está certo em
+// barrar — não tem como distinguir exemplo de vazamento.
+func TestTrackedSecretIsRedactedFromToolOutput(t *testing.T) {
+	const secret = "VALOR-SIGILOSO-DE-TESTE-1234"
+	leaking := &fakeTool{
+		name:   "shell",
+		result: ports.ToolResult{Output: "TOKEN_DO_CONECTOR=" + secret + " e mais coisa"},
+	}
+	model := &fakeModel{responses: []ports.Completion{
+		{ToolCalls: []domain.ToolCall{{ID: "1", Name: "shell", Arguments: `{"command":"env"}`}}},
+		{Content: "pronto", StopReason: "stop"},
+	}}
+	store := newFakeStore()
+	agent := NewAgent(model, []ports.Tool{leaking}, &fakeScreen{}, store, &fakeLock{},
+		fixedClock, "instruções",
+		WithGuardrailJournal(&recordingJournal{}),
+		WithTrackedSecrets([]string{secret}))
+	task, _ := domain.NewTask("redacao-1", 1, "mostre o ambiente", fixedClock())
+
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+
+	conv, err := store.LoadConversation(context.Background(), task.ID)
+	if err != nil || conv == nil {
+		t.Fatalf("conversa não foi gravada: %v", err)
+	}
+	for _, m := range conv.Messages {
+		if strings.Contains(m.Content, secret) {
+			t.Fatalf("o segredo sobreviveu no histórico (papel %s): %s", m.Role, m.Content)
+		}
+	}
+	// A saída precisa CONTINUAR útil: redigir tudo seria tão ruim quanto não
+	// redigir nada, porque o modelo perderia o contexto do que rodou.
+	var kept bool
+	for _, m := range conv.Messages {
+		if strings.Contains(m.Content, "e mais coisa") {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Error("só o segredo devia sumir, não a saída inteira")
+	}
+}
+
+// SEM rastrear, o valor passa — é o estado que existia antes.
+//
+// Este caso documenta o defeito e impede que ele volte por omissão: se alguém
+// remover o `WithTrackedSecrets` do ponto de composição, o outro teste falha e
+// este continua passando, deixando claro qual metade quebrou.
+func TestUntrackedSecretIsNotRedacted(t *testing.T) {
+	const secret = "VALOR-QUE-NINGUEM-RASTREOU"
+	leaking := &fakeTool{name: "shell", result: ports.ToolResult{Output: "X=" + secret}}
+	model := &fakeModel{responses: []ports.Completion{
+		{ToolCalls: []domain.ToolCall{{ID: "1", Name: "shell", Arguments: "{}"}}},
+		{Content: "pronto", StopReason: "stop"},
+	}}
+	store := newFakeStore()
+	agent := NewAgent(model, []ports.Tool{leaking}, &fakeScreen{}, store, &fakeLock{},
+		fixedClock, "instruções", WithGuardrailJournal(&recordingJournal{}))
+	task, _ := domain.NewTask("redacao-2", 1, "x", fixedClock())
+	_ = agent.Run(context.Background(), task)
+
+	conv, _ := store.LoadConversation(context.Background(), task.ID)
+	var found bool
+	for _, m := range conv.Messages {
+		if strings.Contains(m.Content, secret) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("sem rastrear, o valor devia passar — é o comportamento documentado")
+	}
+}
+
+// A redação SOBREVIVE à retomada.
+//
+// A conversa vem do disco e os segredos não vêm junto: o campo é não-exportado
+// para não ser serializado. Sem rearmar no `Resume`, a proteção sumiria
+// justamente depois de um take-over — que é quando alguém acabou de digitar uma
+// senha na tela.
+func TestRedactionSurvivesResume(t *testing.T) {
+	const secret = "VALOR-QUE-PRECISA-SOBREVIVER"
+	store := newFakeStore()
+	agent := NewAgent(&fakeModel{responses: []ports.Completion{{Content: "ok", StopReason: "stop"}}},
+		nil, &fakeScreen{}, store, &fakeLock{}, fixedClock, "instruções",
+		WithGuardrailJournal(&recordingJournal{}),
+		WithTrackedSecrets([]string{secret}))
+
+	task, _ := domain.NewTask("redacao-3", 1, "faça", fixedClock())
+	conv := domain.NewConversation(task.ID, "instruções")
+	conv.AddUser("pedido")
+	if err := store.SaveConversation(context.Background(), conv); err != nil {
+		t.Fatalf("preparando a conversa: %v", err)
+	}
+	_ = task.Start(fixedClock())
+	_ = task.Block(domain.BlockPassword, "digite a senha", fixedClock())
+
+	if err := agent.Resume(context.Background(), task, "a senha é "+secret); err != nil {
+		t.Fatalf("retomada: %v", err)
+	}
+	resumed, _ := store.LoadConversation(context.Background(), task.ID)
+	for _, m := range resumed.Messages {
+		if strings.Contains(m.Content, secret) {
+			t.Fatalf("o segredo entrou no histórico pela retomada: %s", m.Content)
+		}
+	}
+}

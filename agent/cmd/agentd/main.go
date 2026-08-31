@@ -350,7 +350,10 @@ func run(o runOptions) error {
 	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
 		service.WithEventSink(eventSink),
 		service.WithGuardrailJournal(taskJournal),
-		service.WithCostEstimator(priceTable, effectiveModel))
+		service.WithCostEstimator(priceTable, effectiveModel),
+		// Pelo CLI a redação vale igual: é a mesma máquina, e o segredo do
+		// conector pode reaparecer numa saída de comando do mesmo jeito.
+		service.WithTrackedSecrets(registry.SecretsFor(context.Background(), request.Connectors)))
 
 	// Ctrl+C precisa liberar a trava da tela: sem isto, uma interrupção deixaria
 	// a tela travada até alguém apagar o arquivo à mão.

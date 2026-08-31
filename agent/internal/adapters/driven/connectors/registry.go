@@ -8,6 +8,7 @@
 package connectors
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -259,6 +260,39 @@ func (r *Registry) ToolsFor(names []string) ([]ports.Tool, []string) {
 		}
 	}
 	return tools, missing
+}
+
+// SecretsFor devolve os valores de credencial dos conectores pedidos.
+//
+// Existe para ARMAR A REDAÇÃO, e só para isso. O mecanismo de apagar segredo do
+// histórico existia inteiro e nunca protegeu nada: `TrackSecret` só era chamado
+// por teste, então `Redact` percorria uma lista vazia em toda mensagem.
+//
+// O que se rastreia é o conjunto que o `agentd` de fato manipula durante a
+// tarefa — e que pode reaparecer numa saída de comando (`env`, um log da API
+// que ecoa o cabeçalho) ou no conteúdo de uma página.
+//
+// Erro de leitura é IGNORADO de propósito: conector sem credencial configurada
+// é caso normal (a ferramenta reclama na hora de usar, com mensagem própria), e
+// derrubar a criação da tarefa aqui trocaria um aviso útil por uma falha seca.
+func (r *Registry) SecretsFor(ctx context.Context, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		lc, ok := r.connectors[name]
+		if !ok {
+			continue
+		}
+		path := r.secretPath(lc.manifest.Auth.SecretRef)
+		if path == "" {
+			continue
+		}
+		value, _, err := r.secrets.Value(ctx, "connectors/"+name, path)
+		if err != nil || strings.TrimSpace(value) == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 // secretPath monta o caminho da credencial. Referência vazia devolve vazio, que

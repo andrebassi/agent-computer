@@ -181,3 +181,60 @@ func TestValidParameterStillReachesTheAPI(t *testing.T) {
 		t.Error("a requisição devia ter chegado à API")
 	}
 }
+
+// SecretsFor devolve a credencial dos conectores anexados, para armar a redação.
+func TestSecretsForReturnsAttachedCredentials(t *testing.T) {
+	registry, _ := newRegistry(t)
+	installForServer(t, registry, "https://api.exemplo.com", ManifestOperation{
+		Name: "op", Path: "/x",
+	}, ManifestAuth{Type: "bearer", SecretRef: "teste-token"})
+
+	if err := registry.SetSecret("teste-token", "VALOR-DE-TESTE-1234"); err != nil {
+		t.Fatalf("gravando a credencial: %v", err)
+	}
+	secrets := registry.SecretsFor(context.Background(), []string{"teste"})
+	if len(secrets) != 1 || secrets[0] != "VALOR-DE-TESTE-1234" {
+		t.Fatalf("devia devolver a credencial do conector anexado: %v", secrets)
+	}
+}
+
+// Conector NÃO anexado não entra — a redação segue o que a tarefa pediu.
+func TestSecretsForIgnoresUnattachedConnectors(t *testing.T) {
+	registry, _ := newRegistry(t)
+	installForServer(t, registry, "https://api.exemplo.com", ManifestOperation{
+		Name: "op", Path: "/x",
+	}, ManifestAuth{Type: "bearer", SecretRef: "teste-token"})
+	_ = registry.SetSecret("teste-token", "VALOR-DE-TESTE-1234")
+
+	if secrets := registry.SecretsFor(context.Background(), []string{"outro"}); len(secrets) != 0 {
+		t.Fatalf("conector não anexado não devia entrar: %v", secrets)
+	}
+}
+
+// Conector SEM credencial configurada não derruba nada.
+//
+// É caso normal: a ferramenta reclama na hora de usar, com mensagem própria e
+// melhor. Derrubar a criação da tarefa aqui trocaria um aviso útil por uma
+// falha seca.
+func TestSecretsForToleratesMissingCredential(t *testing.T) {
+	registry, _ := newRegistry(t)
+	installForServer(t, registry, "https://api.exemplo.com", ManifestOperation{
+		Name: "op", Path: "/x",
+	}, ManifestAuth{Type: "bearer", SecretRef: "nunca-gravado"})
+
+	if secrets := registry.SecretsFor(context.Background(), []string{"teste"}); len(secrets) != 0 {
+		t.Fatalf("sem credencial, devia vir vazio: %v", secrets)
+	}
+}
+
+// Conector sem autenticação declarada também não entra.
+func TestSecretsForSkipsUnauthenticatedConnectors(t *testing.T) {
+	registry, _ := newRegistry(t)
+	installForServer(t, registry, "https://api.exemplo.com", ManifestOperation{
+		Name: "op", Path: "/x",
+	}, ManifestAuth{})
+
+	if secrets := registry.SecretsFor(context.Background(), []string{"teste"}); len(secrets) != 0 {
+		t.Fatalf("conector sem auth não tem segredo: %v", secrets)
+	}
+}

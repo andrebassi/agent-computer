@@ -145,6 +145,12 @@ tasks:
       - mkdir -p logs
       - ./scripts/36-guardrails-test.sh 2>&1 | tee logs/guardrails-test.log
 
+  redaction-test:
+    desc: 'Prova que o segredo do conector some do histórico quando a API o devolve'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/37-redaction-test.sh 2>&1 | tee logs/redaction-test.log
+
   ssrf-test:
     desc: 'Prova que conector não alcança a rede interna — nem por NOME que resolve para lá'
     cmds:
