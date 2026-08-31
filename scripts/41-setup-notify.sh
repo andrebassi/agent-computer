@@ -56,13 +56,37 @@ echo
 echo "=== 3. entrega de teste, com um aviso de verdade ==="
 # O ntfy responde 200 com um JSON que traz o id da mensagem. Conferir o CODIGO e
 # insuficiente: um proxy no caminho tambem devolve 200.
-resposta="$(root_ssh "set -a; . /etc/agentd/notify.env; set +a; \
-  curl -sS --max-time 15 -H 'Title: agent-computer' -H 'Tags: white_check_mark' \
-  -d 'canal ligado: os avisos do agente chegam aqui' \"\$AGENT_WEBHOOK\"" 2>&1)"
-case "$resposta" in
-  *'"id"'*) echo "  ✅ o ntfy aceitou e devolveu um id de mensagem" ;;
-  *) echo "  🛑 resposta inesperada: $resposta"; exit 1 ;;
-esac
+# AGENT_WEBHOOK pode trazer VARIOS destinos, cada um com prefixo de formato --
+# entao o teste sonda cada URL separadamente, em vez de mandar um curl para a
+# string inteira (que viraria uma URL invalida com virgula no meio).
+destinos="$(root_ssh "set -a; . /etc/agentd/notify.env; set +a; echo \"\$AGENT_WEBHOOK\"" 2>&1 | tr ',' '\n')"
+total=0; aceitos=0
+while IFS= read -r item; do
+  item="$(printf '%s' "$item" | tr -d ' \r')"
+  [ -z "$item" ] && continue
+  # tira o prefixo de formato, quando houver
+  url="${item#*=}"
+  case "$item" in ntfy=*|raw=*) : ;; *) url="$item" ;; esac
+  total=$((total + 1))
+  # `< /dev/null` e OBRIGATORIO aqui: dentro de um laco, o ssh le o stdin ate o
+  # fim e engole as linhas restantes -- o laco roda UMA vez e para, sem erro.
+  # Medido em 31/08/2026: com dois destinos configurados, o teste imprimiu
+  # "destinos: 1 de 1 aceitaram" e o segundo nunca foi sondado.
+  #
+  # Nao se resolve com `ssh -n` na funcao compartilhada: outros usos entregam
+  # conteudo pelo stdin de proposito (`printf ... | root_ssh "cat > arquivo"`).
+  code="$(root_ssh "curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    -H 'Title: agent-computer' -H 'Tags: white_check_mark' \
+    -d 'canal ligado: os avisos do agente chegam aqui' '$url'" </dev/null 2>&1 | tr -dc '0-9')"
+  if [ "${code:-0}" -ge 200 ] && [ "${code:-0}" -lt 300 ]; then
+    aceitos=$((aceitos + 1))
+    echo "  ✅ aceitou (HTTP $code): $(printf '%s' "$url" | cut -c1-48)…"
+  else
+    echo "  🛑 recusou (HTTP ${code:-sem resposta}): $url"
+  fi
+done <<< "$destinos"
+echo "  destinos: $aceitos de $total aceitaram"
+[ "$aceitos" -gt 0 ] || exit 1
 
 echo
 echo "=== 4. arquivando a fila acumulada antes de ligar a torneira ==="

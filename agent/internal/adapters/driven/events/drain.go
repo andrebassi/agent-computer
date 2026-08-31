@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -33,8 +34,19 @@ func Drain(ctx context.Context, spool *Spool, sink ports.EventSink) (int, error)
 
 	delivered := 0
 	var firstErr error
+	var partials []string
 	for _, event := range pending {
-		if err := sink.Publish(ctx, event); err != nil {
+		err := sink.Publish(ctx, event)
+		// Entrega PARCIAL não segura a fila: o aviso já chegou a alguém, e
+		// reenviá-lo por causa de um destino quebrado inundaria de duplicatas
+		// justamente o destino que funciona — até quem recebe silenciar o canal.
+		var partial *PartialDelivery
+		if errors.As(err, &partial) {
+			partials = append(partials, partial.Error())
+			delivered++
+			continue
+		}
+		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("entregando %s: %w", event.TaskID, err)
 			}
@@ -49,6 +61,11 @@ func Drain(ctx context.Context, spool *Spool, sink ports.EventSink) (int, error)
 	}
 	if err := spool.Clear(ctx); err != nil {
 		return delivered, fmt.Errorf("limpando fila: %w", err)
+	}
+	if len(partials) > 0 {
+		// A fila JÁ foi limpa. Isto volta como aviso para aparecer no log do
+		// serviço, não como falha que faria o systemd marcar a unidade em erro.
+		return delivered, &PartialDelivery{Delivered: delivered, Failures: partials}
 	}
 	return delivered, nil
 }

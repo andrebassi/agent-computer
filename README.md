@@ -332,7 +332,24 @@ task notify-test      # e um aviso NASCIDO de uma tarefa real, da fila ao destin
 📖 **Passo a passo completo — instalar o app, escolher o tópico, ligar, testar e
 diagnosticar — em [`NOTIFICATIONS.md`](docs/NOTIFICATIONS.md).**
 
-Dois formatos, escolhidos por `AGENT_WEBHOOK_FORMAT`:
+`AGENT_WEBHOOK` aceita **vários destinos**, cada um no seu formato — hoje são
+dois, servindo a leitores diferentes:
+
+```ini
+AGENT_WEBHOOK=ntfy=https://ntfy.sh/agent-computer,raw=https://api.webhookinbox.com/i/zOkMqPRA/in/
+```
+
+| Destino | Formato | Para quê |
+|---|---|---|
+| ntfy | `ntfy` | **agir** — texto no celular de quem precisa resolver |
+| WebhookInbox | `raw` | **depurar** — guarda o JSON com campos e cabeçalhos |
+
+A fila é limpa se **pelo menos um** aceitar: exigir todos faria um destino
+quebrado inundar o destino bom de duplicatas a cada 5 min, até alguém silenciar
+o canal.
+
+Dois formatos, escolhidos por `AGENT_WEBHOOK_FORMAT` (ou pelo prefixo de cada
+destino):
 
 | Formato | Corpo | Para quem |
 |---|---|---|

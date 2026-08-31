@@ -68,6 +68,9 @@ printf '%s\n' "https://ntfy.sh/agent-computer" \
   | pass insert -m -f bassi/agent-computer/ntfy-url
 ```
 
+Para mais de um destino, é a mesma entrada com a lista — ver
+[Vários destinos ao mesmo tempo](#vários-destinos-ao-mesmo-tempo).
+
 ## Passo 4 — ligar na máquina
 
 Um comando, que também prova que ficou de pé:
@@ -82,7 +85,7 @@ Ele faz seis coisas, nesta ordem:
 |---|---|
 | 1 | grava `/etc/agentd/notify.env` como `root:root 0600` |
 | 2 | prova que **o usuário do modelo não lê** o arquivo |
-| 3 | entrega um aviso de teste e confere que o ntfy devolveu um id |
+| 3 | entrega um aviso de teste a **cada destino** e confere o código de cada um |
 | 4 | **arquiva** a fila acumulada, para o canal não estrear despejando tudo |
 | 5 | roda a unidade de drenagem e mostra o resultado |
 | 6 | mostra o que sobrou na fila |
@@ -98,13 +101,16 @@ Saída esperada, com `erros: 0` no fim:
   ✅ recusado por permissao (a mensagem, nao o codigo de saida)
 
 === 3. entrega de teste, com um aviso de verdade ===
-  ✅ o ntfy aceitou e devolveu um id de mensagem
+  ✅ aceitou (HTTP 200): https://ntfy.sh/agent-computer…
+  ✅ aceitou (HTTP 200): https://api.webhookinbox.com/i/zOkMqPRA/in/…
+  destinos: 2 de 2 aceitaram
 ```
 
-O arquivo que ele grava tem duas linhas:
+O arquivo que ele grava tem duas linhas — esta é a configuração em uso, com dois
+destinos:
 
 ```ini
-AGENT_WEBHOOK=https://ntfy.sh/agent-computer
+AGENT_WEBHOOK=ntfy=https://ntfy.sh/agent-computer,raw=https://api.webhookinbox.com/i/zOkMqPRA/in/
 AGENT_WEBHOOK_FORMAT=ntfy
 ```
 
@@ -206,6 +212,62 @@ A fila só é consumida quando a entrega **se confirma**. Aceitar um 4xx como
 sucesso perderia o aviso em silêncio, que é exatamente o que este mecanismo
 existe para impedir.
 
+## Vários destinos ao mesmo tempo
+
+`AGENT_WEBHOOK` aceita uma **lista separada por vírgula**, e cada item pode
+trazer o seu próprio formato:
+
+```ini
+AGENT_WEBHOOK=ntfy=https://ntfy.sh/agent-computer,raw=https://api.webhookinbox.com/i/zOkMqPRA/in/
+AGENT_WEBHOOK_FORMAT=ntfy
+```
+
+É a configuração em uso, e os dois destinos servem a leitores diferentes:
+
+| Destino | Formato | Para quê |
+|---|---|---|
+| `ntfy.sh/agent-computer` | `ntfy` | **agir** — o texto chega ao celular de quem precisa resolver |
+| `api.webhookinbox.com/i/…/in/` | `raw` | **depurar** — guarda o JSON com os campos e os cabeçalhos da requisição |
+
+O [WebhookInbox](https://webhookinbox.com) é um coletor descartável: aceita
+qualquer POST e mostra corpo, cabeçalhos, IP e horário. Serve para ver o que o
+agente realmente manda, sem escrever endpoint nenhum. Para ler o que chegou:
+
+```bash
+curl -s "https://api.webhookinbox.com/i/zOkMqPRA/items/?order=-created&max=5" | jq .
+```
+
+**Regras da lista:**
+
+| Escrita | Vira |
+|---|---|
+| `ntfy=<url>` | aquele destino em formato ntfy |
+| `raw=<url>` | aquele destino em JSON |
+| `<url>` sem prefixo | usa o `AGENT_WEBHOOK_FORMAT` |
+| espaço em volta, item vazio, vírgula sobrando | ignorados |
+
+⚠️ **URL com `=` na query não é confundida com prefixo.** `https://x/in/?token=abc`
+continua inteira: o prefixo só vale quando o que vem antes do `=` **é** um
+formato conhecido (`ntfy` ou `raw`). Sem essa checagem, o destino viraria `abc`
+— lixo silencioso.
+
+### Quando um dos destinos falha
+
+**A fila é limpa se pelo menos um destino aceitar.** Exigir que todos aceitem
+parece mais rigoroso e é pior na prática: um destino permanentemente quebrado
+seguraria o aviso, e a cada 5 minutos o destino **bom** receberia a mesma
+notificação de novo — até quem recebe silenciar o canal, e aí nada mais chega.
+
+| Situação | Fila | Unidade |
+|---|---|---|
+| todos aceitaram | limpa | `success` |
+| **parte** aceitou | limpa | `success`, com `⚠️ entregue a N destino(s); falhou em: …` no log |
+| ninguém aceitou | **intacta**, tenta na próxima passada | `failed` |
+
+O objetivo do mecanismo é a pessoa ficar sabendo. Se um destino entregou, ela
+soube — o que falhou vira linha no `journalctl -u agentd-notify`, sem travar
+nada.
+
 ## Trocar de destino depois
 
 Nada aqui é específico do ntfy — `AGENT_WEBHOOK` é uma URL qualquer.
@@ -221,8 +283,7 @@ task notify-setup && task notify-test
 **Endpoint próprio**, que prefira os campos crus:
 
 ```ini
-AGENT_WEBHOOK=https://seu-servico/hook
-AGENT_WEBHOOK_FORMAT=raw
+AGENT_WEBHOOK=raw=https://seu-servico/hook
 ```
 
 `raw` envia `{"task_id","screen","kind","reason","detail","summary","message","at"}`.
@@ -242,7 +303,8 @@ errado não pode impedir a entrega. Entregar feio é ruim; perder o aviso é pio
 
 | Peça | Onde | Dono |
 |---|---|---|
-| destino e formato | `/etc/agentd/notify.env` | `root:root 0600` |
+| destino(s) e formato | `/etc/agentd/notify.env` | `root:root 0600` |
+| entrega a vários destinos | `internal/adapters/driven/events/webhook_multi.go` | — |
 | fila de avisos | `/workspace/agent/events/events.jsonl` | `agentd:agent 0600` |
 | filas arquivadas | `/workspace/agent/events/events-<data>.jsonl` | idem |
 | unidade de entrega | `agentd-notify.service` | roda como `agentd` |
