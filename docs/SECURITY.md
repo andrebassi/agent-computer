@@ -8,6 +8,13 @@ Referência de método: `~/works/dux/duxbot-local/plans/sec-plan.md`. Três padr
 de lá foram aplicados aqui, e um achado inteiro (a escalada por arquivo de
 ambiente) foi encontrado por procurar exatamente a classe que ele descreve.
 
+⚠️ **Este documento cobre a contenção de INFRAESTRUTURA** — quem é o usuário,
+o que ele alcança, onde o segredo mora. A contenção do **comportamento do agente
+em execução** (tetos de turno, custo, tempo e laço de ferramenta) está em
+[`GUARDRAILS.md`](GUARDRAILS.md), e as duas se apoiam: os arquivos de memória do
+laço são `agentd:agent 0640` pela mesma razão de `skills/` — conteúdo que entra
+no prompt é instrução, e quem controla a própria instrução não está contido.
+
 ---
 
 ## O adversário
@@ -201,6 +208,29 @@ Verificado na máquina por `task ssrf-test`, com prova de falha nos dois
 sentidos: com o discador desarmado o teste reprovou mostrando o vazamento
 (`HTTP 200 {"status":"ok"}` — a porta de tarefas interna, alcançada pelo nome);
 restaurado, `erros: 0`.
+
+---
+
+## Fechado em 31/08/2026: teto de gasto do agente principal
+
+Havia uma assimetria que só aparece quando se procura: a delegação ao agente de
+código rodava com `--max-budget-usd 5.00`, e era o **único teto de dinheiro do
+sistema**. O agente delegado tinha orçamento; o principal, que decide quantas
+vezes delegar, não tinha nenhum.
+
+Os campos `PromptTokens` e `CompletionTokens` chegavam preenchidos do adaptador,
+com o comentário "alimentam o controle de custo" — e nenhum consumidor os lia.
+
+Agora há teto por tarefa em dólares (US$ 3,00, `AGENTD_MAX_COST_USD`), acumulado
+entre retomadas, com a tabela de preços em `/workspace/agent/pricing.json`. O
+detalhe da conta — cache 4× mais barato, preço que dobra acima de 200k de prompt
+— está em [`GUARDRAILS.md`](GUARDRAILS.md).
+
+Uma decisão de segurança que vale registrar: **modelo sem preço não bloqueia**.
+`0, false` significa "não sei", não "de graça". A alternativa — tratar ausência
+de preço como custo zero — faria um modelo recém-cadastrado rodar sem teto sem
+que nada indicasse, que é exatamente a falha silenciosa que este documento
+existe para evitar.
 
 ---
 

@@ -1,5 +1,9 @@
 # Exemplos de conectores e habilidades
 
+Este arquivo cataloga **o que já existe**. Para **criar um novo** — o contrato
+campo a campo, o passo a passo e as armadilhas — veja
+[`docs/EXTENDING.md`](../docs/EXTENDING.md).
+
 ## Conectores
 
 Manifestos prontos, todos testados contra a API real. Instalar é copiar o

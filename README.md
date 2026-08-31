@@ -32,6 +32,9 @@ Lab — serve para testar o conceito, não para produção.
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
 | [Avaliação do CloakBrowser](#avaliação-do-cloakbrowser) | por que evasão de anti-bot não entra aqui |
 | [Loop engineering, porta HTTP e proatividade](#loop-engineering-porta-http-e-proatividade) | **4 defeitos de produção corrigidos**, e o porquê de cada decisão |
+| [Guardrails do laço](docs/GUARDRAILS.md) | **os tetos que param o agente**, e por que o ralph não os tem |
+| [Estender o agente](docs/EXTENDING.md) | **criar conector, habilidade e runner** — contrato, passo a passo e armadilhas |
+| [Os arquivos que o agente usa](docs/STATE-FILES.md) | matriz de todo estado: para que serve, quando e como mexer |
 | [`examples/`](examples/README.md) | conectores e habilidades prontos |
 
 
@@ -76,6 +79,49 @@ Cada camada achou o que as outras não achariam:
 | hostil | campo desconhecido aceito com 201 (um `"screens"` em vez de `"screen"` ia para a tela errada em silêncio) |
 | boot | **`agentd-api` não subia depois do reboot** — perdeu o `wantedBy` na migração; sistema `running`, zero unidades em falha, porta fora do ar |
 | a própria infra de teste | **duas suítes concorrentes** contra a mesma máquina — log entrelaçado, `erros: 1` mentiroso numa e `erros: 0` sem valor na outra; fechado por `scripts/suite-lock.sh` |
+
+## Guardrails: o que para o agente
+
+Contenção do **comportamento em execução** — separada da de infraestrutura
+(cofre, rebaixamento de usuário, firewall), que está em
+[`SECURITY.md`](docs/SECURITY.md). O detalhe inteiro em
+[`GUARDRAILS.md`](docs/GUARDRAILS.md).
+
+Quatro detectores, todos em código, todos terminando em `blocked` + take-over —
+a mesma máquina que o agente usa para pedir ajuda diante de uma senha:
+
+| Detector | Limiar | Ajustável por |
+|---|---|---|
+| turnos acumulados por tarefa | 180 | `AGENTD_MAX_TURNS` |
+| mesma ferramenta falhando com os mesmos argumentos | 3 | `AGENTD_MAX_TOOL_FAILURES` |
+| custo acumulado em dólares | US$ 3,00 | `AGENTD_MAX_COST_USD` |
+| fração do tempo da tarefa | 80% de 2 h | — |
+
+Mais quatro arquivos de memória em `/workspace/agent/`, `agentd:agent 0640` — o
+modelo lê e **nunca escreve**:
+
+```
+guardrails.md   lições que ENTRAM NO PROMPT de toda tarefa nova
+progress.md     desfecho de cada tarefa
+activity.log    por iteração: ferramenta, duração, tokens, cache, custo
+errors.log      falha de ferramenta com contagem de repetição
+```
+
+### A ideia veio do ralph; o mecanismo, não
+
+Os quatro arquivos são do [ralph](https://github.com/iannuttall/ralph). Lendo o
+código dele, quase nada é enforcement: **o único gate determinístico do sistema
+inteiro é um `grep`** por `<promise>COMPLETE</promise>` no stdout — um sinal que
+o próprio modelo decide emitir. E a documentação afirma que as lições são
+*"injected into context at the start of each iteration"*; o código injeta o
+**caminho** do arquivo e pede que o modelo o leia. Nenhuma linha lê o conteúdo.
+
+Aqui a divisão é explícita: **detectar é código, conter é mudança de estado, e o
+serviço lê o que escreveu.** Nada da contenção depende de o modelo cooperar.
+
+Por que `blocked` e não `failed`: o guardrail **para** a tarefa, não a joga fora.
+O trabalho e a tela ficam, e a pessoa decide se retoma. Se encerrasse, parar cedo
+custaria tudo o que já foi feito — e a primeira reação seria desligá-lo.
 
 ## Dois sistemas, e os dois valem
 
@@ -485,6 +531,21 @@ desde o primeiro commit. Ler o arquivo antes teria custado dez segundos.
       clicou em "Learn more" e reportou o destino. E diante de `github.com/login`
       ele navegou, leu, **preencheu o usuário** e parou pedindo take-over — que é
       a cláusula da documentação funcionando por inteiro.
+
+- [x] ~~O laço não tinha contenção nenhuma~~ — **fechado**. Quatro detectores em
+      código (turnos, ferramenta em laço, custo em dólares, tempo de parede),
+      quatro arquivos de memória que o modelo lê e nunca escreve, e a lição
+      aprendida entrando no prompt da tarefa seguinte.
+
+      Junto vieram quatro buracos que já existiam: `ToolResult.Failed` era
+      escrito por toda ferramenta e **lido por nenhuma**; o contador de turnos
+      zerava a cada retomada; `StopReason` nunca era lido, então resposta
+      truncada virava `done` **com sucesso**; e `Resume` persistia `running`
+      antes de tomar a trava, transformando tarefa `blocked` em `failed` quando
+      a tela estava ocupada.
+
+      Detalhe em [`GUARDRAILS.md`](docs/GUARDRAILS.md); prova em
+      `task guardrails-test`, 12 seções na máquina real.
 
 - [x] ~~Orquestrar Grok e Claude Code~~ — ferramenta `delegate_to_code`,
       **provada com a tarefa mista**: o Grok leu `stargazers_count = 136822` da
