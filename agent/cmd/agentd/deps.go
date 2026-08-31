@@ -12,6 +12,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/journal"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/pricing"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/runners"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
@@ -51,6 +52,10 @@ type deps struct {
 	journal *journal.Journal
 	// runners é o catálogo fechado de agentes de código para a delegação.
 	runners *runners.Catalog
+	// prices converte tokens em dólares, para o teto de custo.
+	prices *pricing.Table
+	// modelName é a chave da tabela de preços.
+	modelName string
 	// taskBudget é quanto tempo uma tarefa tem, para o detector de tempo de
 	// parede saber a FRAÇÃO consumida. Zero desliga o detector.
 	taskBudget time.Duration
@@ -64,6 +69,14 @@ type deps struct {
 // exigi-la justamente quando algo deu errado.
 func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, error) {
 	d := &deps{stateDir: stateDir, verbose: verbose}
+
+	// A chave da tabela de preços é o modelo EFETIVO: o que a flag pediu, ou o
+	// padrão do cliente. Deixar vazio faria a busca falhar e o teto sumir sem
+	// aviso, no caminho mais comum — o de quem não passa `-model`.
+	d.modelName = modelName
+	if d.modelName == "" {
+		d.modelName = xai.DefaultModel()
+	}
 
 	// O diário e o catálogo são montados SEMPRE, inclusive nas operações locais:
 	// nenhum dos dois precisa da chave do modelo, e um `-catalog` que não
@@ -79,6 +92,19 @@ func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, err
 		catalog, _ = runners.Parse([]byte("{}"))
 	}
 	d.runners = catalog
+
+	// A tabela de preços é lida do volume, e não compilada: preço envelhece, e
+	// uma tabela desatualizada dentro do binário só se corrige recompilando.
+	//
+	// Sem tabela, o agente roda igual e o teto em dólar não existe. Derrubar o
+	// processo por falta de preço trocaria um risco financeiro por uma parada
+	// certa.
+	prices, priceErr := pricing.Load(filepath.Join(stateDir, "pricing.json"))
+	if priceErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: tabela de preços ignorada, teto de custo desligado: %v\n", priceErr)
+		prices, _ = pricing.Parse([]byte("{}"))
+	}
+	d.prices = prices
 
 	if needsModel {
 		// A chave vem do COFRE e, na falta dele, do ambiente. Nunca de
@@ -197,7 +223,8 @@ func (d *deps) agentFactory() api.AgentFactory {
 			time.Now, agentInstructions,
 			service.WithEventSink(d.sink),
 			service.WithGuardrailJournal(d.journal),
-			service.WithTaskBudget(d.taskBudget))
+			service.WithTaskBudget(d.taskBudget),
+			service.WithCostEstimator(d.prices, d.modelName))
 		return agent, finalPrompt, nil
 	}
 }

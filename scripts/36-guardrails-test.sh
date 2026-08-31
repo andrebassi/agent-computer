@@ -244,6 +244,63 @@ else
 fi
 
 echo
+echo "=== 8c. TETO DE CUSTO: a conta e medida e o teto morde ==="
+# A tabela de precos precisa existir e cobrir o modelo em uso. Sem isso o teto
+# em dolar nao existe -- e isso e deliberado (preco ausente e "nao sei", nao "de
+# graca"), mas o teste precisa saber em qual dos dois casos esta.
+if agent_ssh "cat $STATE/pricing.json 2>/dev/null" | grep -q "grok-4.6"; then
+  ok "ha preco cadastrado para o modelo em uso"
+else
+  fail "sem preco para grok-4.6 -- o teto em dolar esta desligado"
+fi
+
+# O custo de uma tarefa real aparece no activity.log, com o cache separado.
+if agent_ssh "tail -20 $STATE/activity.log" | grep -qE 'custo=US\$[0-9]'; then
+  ok "o custo por turno e registrado"
+  agent_ssh "tail -20 $STATE/activity.log" | grep -oE 'tokens=[0-9]+/[0-9]+ cache=[0-9]+ custo=US\$[0-9.]+' | tail -1 | sed 's/^/      /'
+else
+  fail "o activity.log nao registra custo"
+fi
+
+# O TETO. Forcado a um centavo, so nesta invocacao: uma tarefa real custa
+# ~US$ 0,004, entao um centavo cai no segundo ou terceiro turno.
+before="$(agent_ssh "python3 -c \"
+import json,glob
+print(sum(1 for c in glob.glob('$STATE/tasks/*.json') if json.load(open(c)).get('BlockReason')=='guardrail'))
+\" 2>/dev/null" | tr -d '\r')"
+
+stuckTask="$(agent_ssh "python3 -c \"
+import json,glob
+for caminho in glob.glob('$STATE/tasks/*.json'):
+    t = json.load(open(caminho))
+    if t.get('Screen') == 5 and t.get('State') in ('blocked','running','pending'):
+        print(t['ID']); break
+\" 2>/dev/null" | tr -d '\r')"
+[ -n "$stuckTask" ] && agentd_run "-abandon -task $stuckTask" >/dev/null 2>&1
+
+output="$(root_ssh "AGENTD_MAX_COST_USD=0.01 setpriv --reuid=agentd --regid=agentd --init-groups -- /usr/local/bin/agentd -screen 5 -prompt 'Liste os arquivos de /workspace com a ferramenta shell, depois conte quantos sao, depois diga o nome do maior. Faca um passo por vez.'" 2>&1)"
+createdTask="$(printf '%s' "$output" | sed -n 's/.*\(task-[0-9]\{6,\}\).*/\1/p' | head -1)"
+
+if [ -z "$createdTask" ]; then
+  fail "a tarefa do teto de custo nao foi criada"
+else
+  state="$(agent_ssh "python3 -c \"
+import json
+t = json.load(open('$STATE/tasks/$createdTask.json'))
+print(t['State'], '|', t.get('BlockReason',''), '| US\$%.4f' % t.get('CostUSD',0), '|', t.get('BlockDetail','')[:70])
+\" 2>/dev/null" | tr -d '\r')"
+  case "$state" in
+    "blocked | guardrail |"*)
+      ok "a tarefa parou no teto de custo"
+      echo "      $state"
+      ;;
+    *)
+      fail "esperava bloqueio por custo, veio: $state"
+      ;;
+  esac
+fi
+
+echo
 echo "=== 9. o bloqueio por guardrail e RETOMAVEL, nao terminal ==="
 # O guardrail para a tarefa; nao a joga fora. Se ele encerrasse, parar cedo
 # custaria todo o trabalho ja feito -- e a pessoa preferiria desliga-lo.

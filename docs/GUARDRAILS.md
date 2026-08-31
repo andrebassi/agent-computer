@@ -63,6 +63,7 @@ o que o teto existe para evitar. Todos terminam em `blocked` + take-over.
 |---|---|---|
 | turnos acumulados por tarefa | 180 | `AGENTD_MAX_TURNS` |
 | mesma ferramenta falhando com os mesmos argumentos | 3 | `AGENTD_MAX_TOOL_FAILURES` |
+| **custo acumulado da tarefa** | **US$ 3,00** | `AGENTD_MAX_COST_USD` |
 | fração do tempo da tarefa | 80% de 2 h | — |
 
 Mais um caso que não é limiar: **resposta truncada**. Um `finish_reason:
@@ -80,6 +81,36 @@ O motivo de bloqueio é o sexto (`guardrail`), separado dos cinco da documentaç
 do produto de propósito: aqueles descrevem o que o **site** exige; este é nós
 parando o agente. Reaproveitar `human_required` faria a tela dizer "o site exige
 uma pessoa" quando o site não exigiu nada.
+
+### Teto de custo
+
+Em dólares, não em tokens: token não se compara entre modelos, e o limite que
+importa a quem paga é o da fatura.
+
+**A tabela de preços mora em `/workspace/agent/pricing.json`, não no binário.**
+Preço envelhece, e tabela compilada só se corrige recompilando — uma tabela
+velha é pior que nenhuma, porque o teto passa a cortar no lugar errado e o
+número parece medido. Cada entrada carrega a origem e a data.
+
+Três coisas que a conta precisa acertar, e que uma multiplicação ingênua erra:
+
+| | Por quê |
+|---|---|
+| **cache custa 4× menos** | US$ 0,50 contra 2,00 por 1M no grok-4.6. Este agente usa cache de propósito — a ordem estável das ferramentas existe para isso —, e ignorá-lo superestimaria a conta em até 4×, parando a tarefa cedo demais |
+| **acima de 200k de prompt o preço DOBRA** | entrada e saída. Um histórico longo cruza essa linha sem avisar, e uma tabela de preço único erraria por 100% justamente nas tarefas caras |
+| **`cached` está contido em `prompt`** | não somado. Somar contaria o mesmo token duas vezes |
+
+**Modelo sem preço não bloqueia — e isso é deliberado.** `0, false` significa
+"não sei", não "de graça": tratar os dois igual faria um modelo recém-cadastrado
+rodar sem teto sem nada indicar. Os tokens continuam somados, então dá para
+descobrir depois quanto ele andou custando.
+
+Conferido na máquina, com a conta batendo à mão: `tokens=2505/3 cache=512
+custo=US$0.0043` — (2505−512)×2,00 + 512×0,50 + 3×6,00, por milhão.
+
+O paralelo que justifica o teto existir: a delegação ao agente de código já
+rodava com `--max-budget-usd 5.00`. Era o **único** teto de dinheiro do sistema —
+o agente delegado tinha orçamento e o principal não.
 
 ## Multi-runner na delegação
 
@@ -147,8 +178,6 @@ ela, um detector quebrado que bloqueasse tudo passaria em todas as demais.
 
 ## O que continua de fora
 
-- **teto de custo em dólar.** Os tokens são registrados; converter para dinheiro
-  exige tabela de preço por modelo, que envelhece.
 - **limite global de tarefas simultâneas.** São nove telas, e cada uma tem sua
   trava; não há teto agregado.
 - **validação de argumento contra o `Schema`** anunciado ao modelo. Campo

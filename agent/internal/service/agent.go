@@ -52,6 +52,12 @@ type Agent struct {
 	// taskBudget é o tempo concedido à tarefa, usado pelo detector de tempo de
 	// parede. Zero desliga o detector — é o caso do CLI, que não tem teto.
 	taskBudget time.Duration
+	// cost converte tokens em dólares. Nunca é nil; o padrão não conhece preço
+	// nenhum, o que deixa o teto em dólar desligado.
+	cost CostEstimator
+	// modelName é o que a tabela de preços usa como chave. Vazio faz todo
+	// modelo ficar sem preço, e portanto sem teto.
+	modelName string
 }
 
 // discardSink é o destino padrão: descarta tudo.
@@ -108,6 +114,20 @@ func WithGuardrailJournal(journal GuardrailJournal) Option {
 	}
 }
 
+// WithCostEstimator liga o teto de custo a uma tabela de preços.
+//
+// Sem ele o agente roda igual, e o teto em dólar simplesmente não existe — que
+// é o comportamento de antes desta opção. Um teto que se ligasse sozinho com
+// preço adivinhado seria pior: cortaria no lugar errado.
+func WithCostEstimator(estimator CostEstimator, model string) Option {
+	return func(a *Agent) {
+		if estimator != nil {
+			a.cost = estimator
+			a.modelName = model
+		}
+	}
+}
+
 // WithTaskBudget informa quanto tempo a tarefa tem.
 //
 // Quem sabe disso é o supervisor, que monta o contexto com prazo; o laço não
@@ -145,6 +165,7 @@ func NewAgent(
 		// vire pânico em produção.
 		sink:    discardSink{},
 		journal: discardJournal{},
+		cost:    noCost{},
 	}
 	for _, opt := range opts {
 		opt(agent)
@@ -242,7 +263,18 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 
 		conv.AddAssistant(completion.Content, completion.ToolCalls)
 
+		// O custo é somado ANTES de qualquer decisão sobre o turno: o dinheiro
+		// já foi gasto quando a resposta chegou, e não contá-lo num turno que
+		// termina em erro deixaria o teto ser furado justamente pelo caminho que
+		// mais repete.
+		costHit := a.accrueCost(task, completion)
 		a.recordTurn(ctx, task, i, completion, a.clock().Sub(turnStarted))
+		if costHit != nil {
+			if err := a.applyHit(ctx, task, conv, costHit); err != nil {
+				return err
+			}
+			return a.settle(ctx, task, conv)
+		}
 
 		// Sem chamada de ferramenta, o modelo considerou a tarefa terminada —
 		// MENOS quando a resposta foi cortada no meio.

@@ -45,6 +45,18 @@ const (
 	// sempre e passa a custar mais do que evita; ao estourar, a lição mais
 	// antiga é descartada.
 	maxGuardrailsBytes = 4096
+
+	// maxCostPerTaskUSD é o teto de inferência de UMA tarefa, em dólares.
+	//
+	// US$ 3,00 é medido, não chutado. Uma tarefa comum desta máquina gasta ~2,1
+	// mil tokens de prompt por turno (visto no activity.log), e a 2,00/1M isso dá
+	// menos de um centavo por turno. Três dólares cobrem uma tarefa longa e
+	// pesada com folga larga, e param bem antes de um laço queimar a conta.
+	//
+	// O paralelo que justifica o número: a delegação ao agente de código já roda
+	// com `--max-budget-usd 5.00`. Era o único teto de dinheiro do sistema — o
+	// agente DELEGADO tinha orçamento e o principal não.
+	maxCostPerTaskUSD = 3.00
 )
 
 // Os limiares efetivos, lidos do ambiente na subida.
@@ -65,7 +77,25 @@ const (
 var (
 	turnCap           = envInt("AGENTD_MAX_TURNS", maxTurnsPerTask)
 	identicalFailures = envInt("AGENTD_MAX_TOOL_FAILURES", maxIdenticalToolFailures)
+	costCapUSD        = envFloat("AGENTD_MAX_COST_USD", maxCostPerTaskUSD)
 )
+
+// envFloat lê um valor em dólares do ambiente, ou devolve o padrão.
+//
+// Zero e negativo caem no padrão de propósito: se alguém quiser DESLIGAR o teto,
+// que seja por um número absurdo e explícito, não por um `0` que se confunde com
+// variável vazia. Teto desligado por engano é o defeito mais caro possível aqui.
+func envFloat(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
 
 // envInt lê um inteiro positivo do ambiente, ou devolve o padrão.
 func envInt(name string, fallback int) int {
@@ -88,6 +118,7 @@ const (
 	GuardrailToolLoop  GuardrailKind = "ferramenta-em-laco"
 	GuardrailWallClock GuardrailKind = "tempo-de-parede"
 	GuardrailTruncated GuardrailKind = "resposta-truncada"
+	GuardrailCostCap   GuardrailKind = "teto-de-custo"
 )
 
 // GuardrailHit é o veredito de um detector.
@@ -355,10 +386,11 @@ func (a *Agent) recordTurn(ctx context.Context, task *domain.Task, iteration int
 		toolNames = strings.Join(tools, ",")
 	}
 	_ = a.journal.RecordActivity(ctx, fmt.Sprintf(
-		"tarefa=%s tela=%d iteracao=%d turnos=%d duracao=%s tokens=%d/%d parada=%s ferramentas=%s",
+		"tarefa=%s tela=%d iteracao=%d turnos=%d duracao=%s tokens=%d/%d cache=%d custo=US$%.4f parada=%s ferramentas=%s",
 		task.ID, task.Screen, iteration+1, task.TurnsUsed,
 		elapsed.Round(time.Millisecond),
-		completion.PromptTokens, completion.CompletionTokens,
+		completion.PromptTokens, completion.CompletionTokens, completion.CachedTokens,
+		task.CostUSD,
 		completion.StopReason, toolNames))
 }
 
@@ -385,4 +417,55 @@ func (a *Agent) systemPromptWithLessons() string {
 		"Estas linhas vêm de limites que já foram atingidos nesta máquina. " +
 		"Não são sugestões: repetir o que está aqui volta a parar a tarefa.\n" +
 		lessons + "\n--- fim das lições ---"
+}
+
+// CostEstimator converte tokens em dólares.
+//
+// Porto, e não o tipo concreto, pelo motivo de sempre: o laço precisa ser
+// testável sem ler arquivo de preço do disco.
+type CostEstimator interface {
+	// Cost devolve o custo do turno e se havia preço para o modelo.
+	//
+	// O segundo retorno não é preciosismo: `0, false` significa "não sei", e
+	// tratá-lo como "de graça" faria um modelo sem preço rodar sem teto sem que
+	// nada indicasse.
+	Cost(model string, prompt, cached, completion int) (float64, bool)
+}
+
+// noCost é o estimador padrão: não conhece preço nenhum.
+type noCost struct{}
+
+// Cost devolve sempre "não sei", que desliga o teto em dólar.
+func (noCost) Cost(string, int, int, int) (float64, bool) { return 0, false }
+
+// accrueCost soma o turno à conta da tarefa e diz se o teto estourou.
+//
+// A soma acontece SEMPRE, mesmo sem preço: os tokens são acumulados de todo
+// jeito, e é isso que permite conferir o consumo depois de cadastrar um preço
+// que faltava.
+func (a *Agent) accrueCost(task *domain.Task, completion *ports.Completion) *GuardrailHit {
+	task.PromptTokens += completion.PromptTokens
+	task.CompletionTokens += completion.CompletionTokens
+
+	turnCost, priced := a.cost.Cost(a.modelName,
+		completion.PromptTokens, completion.CachedTokens, completion.CompletionTokens)
+	if !priced {
+		// Sem preço não há teto em dólar. O consumo continua medido, e o
+		// activity.log registra — é o que permite descobrir depois quanto um
+		// modelo novo andou custando.
+		return nil
+	}
+	task.CostUSD += turnCost
+
+	if task.CostUSD < costCapUSD {
+		return nil
+	}
+	return &GuardrailHit{
+		Kind: GuardrailCostCap,
+		Detail: fmt.Sprintf(
+			"a tarefa já custou US$ %.2f em inferência (teto US$ %.2f, somando as retomadas) "+
+				"e parou. Foram %d tokens de entrada e %d de saída em %d turnos.",
+			task.CostUSD, costCapUSD, task.PromptTokens, task.CompletionTokens, task.TurnsUsed),
+		Lesson: "",
+	}
 }

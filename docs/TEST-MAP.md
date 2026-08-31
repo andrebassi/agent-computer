@@ -68,6 +68,8 @@ domínio e os adapters com dublê. **Não** cobrem fiação, permissão nem cami
 | **contrato igual nos dois caminhos de deploy** | `32-end-to-end` | 12 |
 | **conector não alcança a rede interna, nem por nome** | `35-connector-ssrf-test` | 2, 3 |
 | **detector de laço bloqueia a tarefa de verdade** | `36-guardrails-test` | 8b |
+| **teto de custo em dólar morde** | `36-guardrails-test` | 8c |
+| o custo por turno é medido, com cache separado | `36-guardrails-test` | 8c |
 | **a lição gravada chega ao prompt da tarefa seguinte** | `36-guardrails-test` | 6 |
 | o modelo não escreve os arquivos de memória | `36-guardrails-test` | 2 |
 | catálogo de runners sem shell, com os 5 cadastrados | `36-guardrails-test` | 3 |

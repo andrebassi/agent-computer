@@ -133,6 +133,22 @@ type Task struct {
 	// teto nenhum sobre o total. Persistido junto do resto do estado, ele
 	// sobrevive à retomada e ao reinício do processo.
 	TurnsUsed int
+	// CostUSD é quanto a tarefa já custou em inferência, ACUMULADO entre
+	// invocações.
+	//
+	// Mora aqui pela mesma razão de TurnsUsed: sem persistir, uma tarefa que
+	// alterna bloqueio e retomada zera a conta a cada volta, e o teto nunca é
+	// alcançado por mais que ela gaste.
+	//
+	// Em dólares, e não em tokens: token não se compara entre modelos, e o
+	// limite que importa a quem paga é o da fatura.
+	CostUSD float64
+	// PromptTokens e CompletionTokens são o acumulado bruto, para o registro.
+	//
+	// Ficam ao lado do custo porque eles sobrevivem à tabela de preços: se o
+	// preço mudar, ou se o modelo não tiver preço, o consumo continua medido.
+	PromptTokens     int
+	CompletionTokens int
 }
 
 // NewTask cria uma tarefa pendente. A tela é validada aqui porque uma tela fora

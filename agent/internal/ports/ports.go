@@ -66,6 +66,12 @@ type Completion struct {
 	// precisa estar à mão, não escondido na fatura.
 	PromptTokens     int
 	CompletionTokens int
+	// CachedTokens é a parcela de PromptTokens que veio do cache do fornecedor.
+	//
+	// Está CONTIDA em PromptTokens, não somada a ela — quem calcula custo cobra
+	// (PromptTokens - CachedTokens) no preço cheio e CachedTokens no preço de
+	// cache. Somar as duas contaria o mesmo token duas vezes.
+	CachedTokens int
 }
 
 // LanguageModel é o porto de saída para o modelo de linguagem.

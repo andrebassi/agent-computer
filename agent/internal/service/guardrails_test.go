@@ -602,3 +602,150 @@ func TestEveryOutcomeIsRecordedInProgress(t *testing.T) {
 		})
 	}
 }
+
+// fixedCost cobra um valor conhecido por turno, para a conta ser conferível.
+type fixedCost struct {
+	perTurn float64
+	// priced diz se o modelo tem preço; false exercita o caminho "não sei".
+	priced bool
+}
+
+// Cost devolve o valor combinado.
+func (f fixedCost) Cost(string, int, int, int) (float64, bool) {
+	return f.perTurn, f.priced
+}
+
+// O teto de custo BLOQUEIA quando a soma dos turnos passa do limite.
+//
+// Com US$ 1,20 por turno e teto de 3,00, o terceiro turno leva a conta a 3,60 e
+// a tarefa para. O segundo (2,40) ainda passa — é a fronteira que o teste fixa.
+func TestCostCapBlocksWhenAccumulatedCostCrossesLimit(t *testing.T) {
+	journal := &recordingJournal{}
+	tool := &fakeTool{name: "shell", result: ports.ToolResult{Output: "ok"}}
+	model := &fakeModel{responses: repeatedCall("shell", "{}", 10)}
+
+	agent := NewAgent(model, []ports.Tool{tool}, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções",
+		WithGuardrailJournal(journal),
+		WithCostEstimator(fixedCost{perTurn: 1.20, priced: true}, "modelo-de-teste"))
+	task, err := domain.NewTask("custo-1", 1, "gaste", fixedClock())
+	if err != nil {
+		t.Fatalf("criação: %v", err)
+	}
+
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("o bloqueio não devia devolver erro: %v", err)
+	}
+	if task.State != domain.StateBlocked {
+		t.Fatalf("devia bloquear por custo, veio %s", task.State)
+	}
+	if task.BlockReason != domain.BlockGuardrail {
+		t.Fatalf("motivo errado: %s", task.BlockReason)
+	}
+	if !strings.Contains(task.BlockDetail, "US$") {
+		t.Errorf("o detalhe devia trazer o valor em dólares: %s", task.BlockDetail)
+	}
+	// Três turnos: 1,20 + 1,20 + 1,20 = 3,60, e o teto é 3,00.
+	if task.TurnsUsed != 3 {
+		t.Errorf("esperava parar no 3º turno, parou no %dº", task.TurnsUsed)
+	}
+	if task.CostUSD < costCapUSD {
+		t.Errorf("o custo acumulado devia ter passado do teto: %.2f", task.CostUSD)
+	}
+}
+
+// Custo BAIXO não bloqueia — o outro sentido.
+//
+// Sem este caso, um teto quebrado que barrasse toda tarefa passaria no de cima.
+func TestCheapTaskIsNotBlockedByCostCap(t *testing.T) {
+	journal := &recordingJournal{}
+	model := &fakeModel{responses: []ports.Completion{{Content: "pronto", StopReason: "stop"}}}
+
+	agent := NewAgent(model, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções",
+		WithGuardrailJournal(journal),
+		WithCostEstimator(fixedCost{perTurn: 0.001, priced: true}, "modelo-de-teste"))
+	task, _ := domain.NewTask("custo-2", 1, "barato", fixedClock())
+
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if task.State != domain.StateDone {
+		t.Fatalf("tarefa barata devia concluir, veio %s", task.State)
+	}
+	if task.CostUSD <= 0 {
+		t.Error("o custo devia ter sido contabilizado mesmo sem bloquear")
+	}
+}
+
+// Modelo SEM preço não bloqueia, mas os tokens continuam somados.
+//
+// É a distinção entre "de graça" e "não sei". Sem ela, cadastrar um modelo novo
+// e esquecer o preço dele desligaria o teto em silêncio — e o consumo ficaria
+// invisível junto, o que impede até descobrir o erro depois.
+func TestUnpricedModelStillAccumulatesTokens(t *testing.T) {
+	journal := &recordingJournal{}
+	model := &fakeModel{responses: []ports.Completion{
+		{Content: "pronto", StopReason: "stop", PromptTokens: 5000, CompletionTokens: 700},
+	}}
+
+	agent := NewAgent(model, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções",
+		WithGuardrailJournal(journal),
+		WithCostEstimator(fixedCost{perTurn: 999.0, priced: false}, "modelo-sem-preco"))
+	task, _ := domain.NewTask("custo-3", 1, "sem preço", fixedClock())
+
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if task.State != domain.StateDone {
+		t.Fatalf("sem preço não se bloqueia por custo, veio %s", task.State)
+	}
+	if task.CostUSD != 0 {
+		t.Errorf("sem preço o custo fica zero: %.4f", task.CostUSD)
+	}
+	if task.PromptTokens != 5000 || task.CompletionTokens != 700 {
+		t.Errorf("os tokens deviam ser somados mesmo sem preço: %d/%d",
+			task.PromptTokens, task.CompletionTokens)
+	}
+}
+
+// Sem estimador configurado, o teto em dólar simplesmente não existe.
+//
+// É o comportamento de antes desta opção, e precisa continuar valendo: o CLI e
+// qualquer instalação sem tabela de preços rodam igual.
+func TestWithoutEstimatorThereIsNoCostCap(t *testing.T) {
+	model := &fakeModel{responses: []ports.Completion{
+		{Content: "pronto", StopReason: "stop", PromptTokens: 9_000_000},
+	}}
+	agent := NewAgent(model, nil, &fakeScreen{}, newFakeStore(), &fakeLock{},
+		fixedClock, "instruções", WithGuardrailJournal(&recordingJournal{}))
+	task, _ := domain.NewTask("custo-4", 1, "sem estimador", fixedClock())
+
+	if err := agent.Run(context.Background(), task); err != nil {
+		t.Fatalf("execução: %v", err)
+	}
+	if task.State != domain.StateDone {
+		t.Fatalf("sem estimador devia concluir, veio %s", task.State)
+	}
+}
+
+// O teto em dólar vem do ambiente, e valor inválido cai no padrão.
+func TestCostCapFromEnvironmentFallsBackWhenInvalid(t *testing.T) {
+	cases := []struct {
+		value    string
+		expected float64
+	}{
+		{"1.50", 1.50},
+		{"", 3.0},
+		{"muito", 3.0},
+		{"-2", 3.0},
+		{"0", 3.0},
+	}
+	for _, c := range cases {
+		t.Setenv("AGENTD_TESTE_CUSTO", c.value)
+		if got := envFloat("AGENTD_TESTE_CUSTO", 3.0); got != c.expected {
+			t.Errorf("envFloat(%q) = %.2f, esperava %.2f", c.value, got, c.expected)
+		}
+	}
+}

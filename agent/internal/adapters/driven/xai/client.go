@@ -24,6 +24,14 @@ const defaultBaseURL = "https://api.x.ai/v1"
 // defaultModel foi medido com suporte a chamada de ferramenta em 29/08/2026.
 const defaultModel = "grok-4.6"
 
+// DefaultModel expõe o modelo padrão para quem precisa da CHAVE, não do cliente.
+//
+// Quem precisa é a tabela de preços: sem o nome, ela não acha a entrada, e o
+// teto de custo fica desligado num caminho onde havia preço. Duplicar a string
+// "grok-4.6" no ponto de composição criaria duas fontes de verdade que divergem
+// na primeira troca de modelo.
+func DefaultModel() string { return defaultModel }
+
 // requestTimeout é generoso porque uma resposta com raciocínio longo passa de um
 // minuto, e um timeout curto derrubaria justamente as tarefas difíceis.
 const requestTimeout = 5 * time.Minute
@@ -137,6 +145,20 @@ type chatResponse struct {
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		// Detalhe do prompt: quantos tokens vieram do CACHE do fornecedor.
+		//
+		// Importa para o custo, e muito: o token em cache custa 0,50 por milhão
+		// contra 2,00 do token novo. Este agente usa cache de propósito -- a
+		// ordem estável das ferramentas existe para isso -- então ignorar o
+		// campo superestimaria a conta em até QUATRO vezes, e um teto que
+		// superestima quatro vezes para a tarefa cedo demais.
+		//
+		// Campo opcional: fornecedor que não o devolva deixa zero, e a conta
+		// simplesmente cobra tudo como token novo. Errar para MAIS é o lado
+		// seguro num teto.
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -232,6 +254,7 @@ func (c *Client) attempt(ctx context.Context, messages []domain.Message, tools [
 		StopReason:       choice.FinishReason,
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
+		CachedTokens:     parsed.Usage.PromptTokensDetails.CachedTokens,
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, domain.ToolCall{

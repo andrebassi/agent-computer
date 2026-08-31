@@ -427,7 +427,7 @@ in
       # Criados vazios aqui em vez de por `systemd.tmpfiles.rules`: as regras
       # sob /workspace/agent sao recusadas com "unsafe path transition" e
       # descartadas em silencio (ver o comentario la em cima).
-      for arquivo in guardrails.md progress.md activity.log errors.log runners.json; do
+      for arquivo in guardrails.md progress.md activity.log errors.log runners.json pricing.json; do
         caminho="${workspace}/agent/$arquivo"
         [ -e "$caminho" ] || : > "$caminho"
         chown agentd:agent "$caminho"
@@ -456,6 +456,43 @@ in
 CATALOGO
         chown agentd:agent "${workspace}/agent/runners.json"
         chmod 0640 "${workspace}/agent/runners.json"
+      fi
+
+      # A tabela de precos, para o teto de custo.
+      #
+      # Fica em ARQUIVO e nao no binario porque preco envelhece: tabela dentro
+      # do codigo so se corrige recompilando, e uma tabela velha e pior que
+      # nenhuma -- o teto passa a cortar no lugar errado e o numero parece
+      # medido.
+      #
+      # A origem de cada entrada vai junto, com a data. Numero de preco sem
+      # procedencia nao se confere.
+      #
+      # ATENCAO ao limiar de 200 mil tokens de prompt: acima dele a xAI COBRA O
+      # DOBRO, entrada e saida. Um agente com historico longo cruza essa linha
+      # sem avisar.
+      if [ ! -s "${workspace}/agent/pricing.json" ]; then
+        cat > "${workspace}/agent/pricing.json" <<'PRECOS'
+{
+  "grok-4.6": {
+    "small_prompt": {"input_per_1m": 2.00, "cached_per_1m": 0.50, "output_per_1m": 6.00},
+    "large_prompt": {"input_per_1m": 4.00, "cached_per_1m": 1.00, "output_per_1m": 12.00},
+    "source": "docs.x.ai/docs/models, consultado em 2026-08-31"
+  },
+  "grok-4.5": {
+    "small_prompt": {"input_per_1m": 2.00, "cached_per_1m": 0.30, "output_per_1m": 6.00},
+    "large_prompt": {"input_per_1m": 4.00, "cached_per_1m": 0.60, "output_per_1m": 12.00},
+    "source": "docs.x.ai/docs/models, consultado em 2026-08-31"
+  },
+  "grok-4.3": {
+    "small_prompt": {"input_per_1m": 1.25, "cached_per_1m": 0.20, "output_per_1m": 2.50},
+    "large_prompt": {"input_per_1m": 2.50, "cached_per_1m": 0.40, "output_per_1m": 5.00},
+    "source": "docs.x.ai/docs/models, consultado em 2026-08-31"
+  }
+}
+PRECOS
+        chown agentd:agent "${workspace}/agent/pricing.json"
+        chmod 0640 "${workspace}/agent/pricing.json"
       fi
       true
     '';

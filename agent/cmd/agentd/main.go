@@ -20,6 +20,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/journal"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/lock"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/pricing"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/runners"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
@@ -334,9 +335,22 @@ func run(o runOptions) error {
 	// pediu para mudar.
 	taskJournal := journal.New(stateDir, time.Now, maxGuardrailsBytes)
 
+	// A tabela de preços vale no CLI também: é a mesma máquina e a mesma conta,
+	// e um teto que só existisse pela porta HTTP seria surpresa.
+	priceTable, priceErr := pricing.Load(filepath.Join(stateDir, "pricing.json"))
+	if priceErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: tabela de preços ignorada, teto de custo desligado: %v\n", priceErr)
+		priceTable, _ = pricing.Parse([]byte("{}"))
+	}
+	effectiveModel := modelName
+	if effectiveModel == "" {
+		effectiveModel = xai.DefaultModel()
+	}
+
 	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
 		service.WithEventSink(eventSink),
-		service.WithGuardrailJournal(taskJournal))
+		service.WithGuardrailJournal(taskJournal),
+		service.WithCostEstimator(priceTable, effectiveModel))
 
 	// Ctrl+C precisa liberar a trava da tela: sem isto, uma interrupção deixaria
 	// a tela travada até alguém apagar o arquivo à mão.
