@@ -319,18 +319,37 @@ $ agentd -notify-drain
 ⚠️ `-notify-drain` **sem `-webhook` não consome** a fila: dá para olhar quantas
 vezes quiser. Com webhook, entrega e limpa — e só aí some.
 
-**A fila só sai da máquina com um destino configurado.** Sem ele o agente
-enfileira o pedido de take-over e ninguém é avisado — hoje há 39 avisos parados
-assim:
+**A fila só sai da máquina com um destino configurado** — sem ele o agente
+enfileira o pedido de take-over e ninguém é avisado. O destino atual é o
+**ntfy.sh**, com o tópico secreto guardado em `bassi/agent-computer/ntfy-url`:
 
 ```bash
-ssh root@<maquina> 'echo "AGENT_WEBHOOK=https://seu-destino/hook" > /etc/agentd/notify.env'
-ssh root@<maquina> 'systemctl start agentd-notify'   # o timer já roda a cada 5 min
+task notify-setup     # grava /etc/agentd/notify.env e prova a entrega ponta a ponta
 ```
 
-⚠️ O arquivo fica em `/etc/agentd/`, **fora de `/workspace`**: o destino dos
-avisos num diretório que o modelo alcança seria o modelo escolhendo para onde
-vão os próprios pedidos de socorro.
+Dois formatos, escolhidos por `AGENT_WEBHOOK_FORMAT`:
+
+| Formato | Corpo | Para quem |
+|---|---|---|
+| `raw` (padrão) | JSON com `task_id`, `screen`, `kind`, `reason`, `message` | endpoint escrito para este projeto |
+| `ntfy` | o **texto** do aviso, com `Title`, `Priority` e `Tags` em cabeçalho | ntfy.sh, e qualquer coisa que renderize o corpo |
+
+O formato importa mais do que parece: entregue como JSON, o aviso chega ao
+celular como uma linha de JSON cru — legível para uma máquina e inútil para quem
+é acordado por ele às três da manhã.
+
+⚠️ **Prioridade alta só para o take-over.** É o único aviso que trava a tela
+esperando gente; marcar tudo como urgente ensina quem recebe a ignorar, e aí o
+que importa se perde no meio.
+
+⚠️ O arquivo fica em `/etc/agentd/notify.env`, `root:root 0600`, **fora de
+`/workspace`**: o destino dos avisos num diretório que o modelo alcança seria o
+modelo escolhendo para onde vão os próprios pedidos de socorro — e apagar a
+linha bastaria para ele trabalhar sem ninguém olhando.
+
+⚠️ No ntfy quem sabe o tópico **lê e publica** nele. O tópico é a única
+credencial que existe, por isso vive no `pass` e nunca aparece em log, em
+argumento de comando ou na saída do script.
 
 E `agent-status`, que é o retrato da máquina:
 

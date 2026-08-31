@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/events"
 )
@@ -44,6 +45,10 @@ func runDrain(ctx context.Context, stateDir, webhookURL string) error {
 	if err != nil {
 		return err
 	}
+	// O formato vem do ambiente, junto do destino: quem configura o webhook é
+	// quem sabe o que há do outro lado. Valor ausente ou desconhecido é `raw`,
+	// que é como o destino sempre funcionou.
+	webhook = webhook.WithFormat(events.ParseWebhookFormat(os.Getenv("AGENT_WEBHOOK_FORMAT")))
 	delivered, err := events.Drain(ctx, spool, webhook)
 	// O número entregue é impresso mesmo em caso de erro: numa entrega parcial,
 	// saber quantos passaram é o que diz se o destino está fora do ar ou se um

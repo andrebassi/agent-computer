@@ -75,6 +75,7 @@ domínio e os adapters com dublê. **Não** cobrem fiação, permissão nem cami
 | **segredo de conector é redigido do histórico** | `37-redaction-test` | 5 seções, na máquina |
 | **os exemplos do README ainda respondem aquilo** | `39-capture-examples` | não é gate: imprime a saída real de 9 comandos baratos, para conferir a doc contra a máquina |
 | **o que ainda falta, medido na máquina** | `40-pending-audit` | não é gate: tetos em vigor, fila de avisos, travas, runners instalados, idade da imagem e do snapshot |
+| **o aviso sai da máquina e chega ao destino** | `41-setup-notify` | 6 seções: dono e modo do arquivo, o modelo não o lê, entrega real ao ntfy, drenagem pela unidade |
 | o custo por turno é medido, com cache separado | `36-guardrails-test` | 8c |
 | **a lição gravada chega ao prompt da tarefa seguinte** | `36-guardrails-test` | 6 |
 | o modelo não escreve os arquivos de memória | `36-guardrails-test` | 2 |

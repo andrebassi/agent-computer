@@ -29,6 +29,7 @@ suficiente para abrir os segredos.
 | `tasks/<id>.json` | estado de uma tarefa | `agentd` | `agentd` | não | `agentd:agent 0750` |
 | `conversations/<id>.json` | histórico completo | `agentd` | `agentd` | **é** o prompt | `agentd:agent 2750` |
 | `events/events.jsonl` | fila de avisos | `agentd` | drenador | não | `agentd:agent 0600` |
+| `/etc/agentd/notify.env` | **destino** dos avisos e formato | operador | drenador | não | `root:root 0600` — **fora de `/workspace`** |
 | `locks/screen-N.lock` | trava de uma tarefa por tela | `agentd`, CLI | ambos | não | `agentd:agent 0660` |
 | `status/screen-N.status` | linha desenhada na tela | `agentd` | overlay | não | `agentd:agent 2750` |
 | `screens/<N>` | marcador de tela a subir no boot | `screen-add` | `agent-screens` | não | `agentd:agent 2770` |

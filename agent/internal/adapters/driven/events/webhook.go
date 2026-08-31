@@ -26,6 +26,9 @@ const webhookTimeout = 15 * time.Second
 type Webhook struct {
 	url    string
 	client *http.Client
+	// format decide a serialização. O padrão é `raw`, para o destino escrito
+	// para este projeto continuar valendo sem mudança.
+	format WebhookFormat
 }
 
 // NewWebhook monta o destino. URL vazia é erro na construção, e não no primeiro
@@ -34,7 +37,7 @@ func NewWebhook(url string) (*Webhook, error) {
 	if url == "" {
 		return nil, fmt.Errorf("URL do webhook vazia")
 	}
-	return &Webhook{url: url, client: &http.Client{Timeout: webhookTimeout}}, nil
+	return &Webhook{url: url, client: &http.Client{Timeout: webhookTimeout}, format: FormatRaw}, nil
 }
 
 // WithClient troca o cliente HTTP, para o teste controlar o transporte.
@@ -65,25 +68,10 @@ type webhookPayload struct {
 // fato na fila e tentar de novo. Aceitar 4xx como sucesso perderia o aviso em
 // silêncio — que é exatamente o que este mecanismo existe para impedir.
 func (w *Webhook) Publish(ctx context.Context, event domain.TaskEvent) error {
-	body, err := json.Marshal(webhookPayload{
-		TaskID:  event.TaskID,
-		Screen:  event.Screen,
-		Kind:    string(event.Kind),
-		Reason:  string(event.Reason),
-		Detail:  event.Detail,
-		Summary: event.Summary,
-		Message: event.Message(),
-		At:      event.At,
-	})
+	req, err := w.request(ctx, event)
 	if err != nil {
-		return fmt.Errorf("serializando aviso: %w", err)
+		return err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("montando requisição: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := w.client.Do(req)
 	if err != nil {
@@ -95,4 +83,31 @@ func (w *Webhook) Publish(ctx context.Context, event domain.TaskEvent) error {
 		return fmt.Errorf("o destino recusou o aviso: HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// request monta a requisição conforme o formato escolhido.
+func (w *Webhook) request(ctx context.Context, event domain.TaskEvent) (*http.Request, error) {
+	if w.format == FormatNtfy {
+		return w.ntfyRequest(ctx, event)
+	}
+	body, err := json.Marshal(webhookPayload{
+		TaskID:  event.TaskID,
+		Screen:  event.Screen,
+		Kind:    string(event.Kind),
+		Reason:  string(event.Reason),
+		Detail:  event.Detail,
+		Summary: event.Summary,
+		Message: event.Message(),
+		At:      event.At,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("serializando aviso: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("montando requisição: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
 }

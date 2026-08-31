@@ -287,6 +287,18 @@ tasks:
       - mkdir -p logs
       - ./scripts/39-capture-examples.sh 2>&1 | tee logs/examples.log
 
+  notify-setup:
+    desc: 'Liga o destino dos avisos (ntfy), e prova que o modelo não alcança o arquivo'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/41-setup-notify.sh 2>&1 | tee logs/notify-setup.log
+
+  notify-test:
+    desc: 'Prova ponta a ponta: tarefa bloqueia, o aviso entra na fila e o drenador o entrega'
+    cmds:
+      - mkdir -p logs
+      - ./scripts/42-notify-endtoend.sh 2>&1 | tee logs/notify-test.log
+
   pending:
     desc: 'Levanta o que ainda falta, perguntando à máquina em vez de à memória'
     cmds:
