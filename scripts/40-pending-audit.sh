@@ -36,9 +36,25 @@ root_ssh "sudo -u agentd agentd -notify-drain 2>&1 | head -1" 2>&1 | sed 's/^/  
 root_ssh "journalctl -u agentd-notify -n 20 --no-pager -o cat 2>/dev/null | grep -E 'entregues|falhou em' | tail -1" 2>&1 | sed 's/^/  ultima entrega: /'
 
 echo
-echo "=== 3. tarefas presas (lock sem processo) ==="
-root_ssh "ls -1 /workspace/agent/locks/ 2>/dev/null | wc -l" 2>&1 | sed 's/^/  travas: /'
-root_ssh "grep -c 'estado=blocked' /workspace/agent/progress.md 2>/dev/null" 2>&1 | sed 's/^/  bloqueios ja registrados: /'
+echo "=== 3. telas presas por tarefa bloqueada ==="
+#
+# A versao anterior contava ARQUIVO de trava (`ls | wc -l`) e linha historica do
+# progress.md, e reportava "travas: 9 / bloqueios: 31" com apenas DUAS telas
+# presas de fato (medido em 31/08/2026). O arquivo de trava nasce na primeira
+# vez que a tela e usada e nunca some -- contar arquivo responde outra pergunta,
+# e a resposta assusta sem motivo.
+#
+# O que prende uma tela e tarefa em estado `blocked`. E ela que o `-abandon`
+# libera, e e ela que a proxima suite encontra ocupando a tela.
+root_ssh "grep -l '\"State\": *\"blocked\"' /workspace/agent/tasks/*.json 2>/dev/null \
+  | while read -r f; do \
+      id=\$(grep -o '\"ID\": *\"[^\"]*\"' \"\$f\" | head -1 | cut -d'\"' -f4); \
+      tela=\$(grep -o '\"Screen\": *[0-9]*' \"\$f\" | head -1 | grep -o '[0-9]*'); \
+      motivo=\$(grep -o '\"BlockReason\": *\"[^\"]*\"' \"\$f\" | head -1 | cut -d'\"' -f4); \
+      echo \"tela \$tela presa por \$id (\$motivo) -- libera com: agentd -abandon -task \$id\"; \
+    done; \
+  test -n \"\$(grep -l '\"State\": *\"blocked\"' /workspace/agent/tasks/*.json 2>/dev/null)\" \
+    || echo 'nenhuma tela presa'" 2>&1 | sed 's/^/  /'
 
 echo
 echo "=== 4. runners: quais existem de fato na maquina ==="

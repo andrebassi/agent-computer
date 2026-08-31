@@ -17,5 +17,11 @@ agent_ssh 'agent-status' 2>&1 | sed 's/^/  /'
 
 echo
 echo "=== snapshots ==="
-timeout 30s doctl compute snapshot list --resource droplet --format Name,ID,Size,Created 2>/dev/null \
-  | grep -E "Name|${DROPLET_NAME}" || echo "  nenhum snapshot"
+# A coluna se chama CreatedAt, nao Created. Com o nome errado o doctl aborta, e
+# o 2>/dev/null que havia aqui transformava o erro em "nenhum snapshot" -- o
+# falso negativo que a rule 13 chama de pior que o falso positivo, porque manda
+# recriar o que ja existe.
+timeout 30s doctl compute snapshot list --resource droplet --format Name,ID,Size,CreatedAt \
+  | grep -E "Name|${DROPLET_NAME}" || echo "  nenhum snapshot de droplet"
+timeout 30s doctl compute snapshot list --resource volume --format Name,ID,Size,CreatedAt \
+  | grep -E "Name|${VOLUME_NAME}" || echo "  nenhum snapshot de volume"
