@@ -312,8 +312,25 @@ func (a *Agent) applyHit(ctx context.Context, task *domain.Task, conv *domain.Co
 			_ = conv.AddSystemNote(fmt.Sprintf("não consegui gravar a lição: %v", err))
 		}
 	}
-	_ = a.journal.RecordError(ctx, fmt.Sprintf("guardrail=%s tarefa=%s tela=%d %s",
-		hit.Kind, task.ID, task.Screen, hit.Detail))
+	_ = a.journal.RecordError(ctx, fmt.Sprintf("guardrail=%s tarefa=%s tela=%d%s %s",
+		hit.Kind, task.ID, task.Screen, a.traceSuffix(ctx), hit.Detail))
+
+	// O instante fica marcado no trecho aberto — que é onde alguém perguntando
+	// "por que esta tarefa parou" já está olhando.
+	//
+	// Só o TIPO do detector e o motivo, os dois de conjunto fechado. O
+	// `hit.Detail` NÃO vai: ele interpola até 240 caracteres da saída real da
+	// ferramenta, e essa saída é conteúdo que o modelo produziu ou leu. Ela
+	// segue disponível em `errors.log`, no volume, com permissão de arquivo —
+	// telemetria sai da máquina, arquivo não.
+	a.tracer.AddEvent(ctx, eventGuardrailHit,
+		String(attrGuardrailKind, string(hit.Kind)),
+		String(attrBlockReason, string(domain.BlockGuardrail)),
+	)
+	// O tipo do detector é um enum de cinco valores — rótulo seguro. É o que
+	// responde "qual guardrail vem disparando", que o trecho só responde uma
+	// tarefa por vez.
+	a.meter.AddCount(ctx, metricGuardrailHits, 1, String(attrGuardrailKind, string(hit.Kind)))
 
 	_ = a.screen.RequestTakeover(ctx, task.Screen, domain.BlockGuardrail, hit.Detail)
 	_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
@@ -397,13 +414,48 @@ func (a *Agent) recordTurn(ctx context.Context, task *domain.Task, iteration int
 	if len(tools) > 0 {
 		toolNames = strings.Join(tools, ",")
 	}
+	// As medidas saem do MESMO ponto que a linha do diário, e de propósito: dois
+	// pontos de coleta divergem no dia em que alguém mexe num só, e o sintoma é
+	// um painel que discorda do arquivo sem que nenhum dos dois esteja errado.
+	//
+	// O modelo entra como rótulo (conjunto fechado e pequeno); o id da tarefa,
+	// NUNCA — ele é `task-<UnixNano>` e criaria uma série por execução.
+	a.meter.AddCount(ctx, metricTokens, int64(completion.PromptTokens),
+		String(attrModel, a.modelName), String(attrTokenType, tokenTypeInput))
+	a.meter.AddCount(ctx, metricTokens, int64(completion.CompletionTokens),
+		String(attrModel, a.modelName), String(attrTokenType, tokenTypeOutput))
+	a.meter.AddCount(ctx, metricTokens, int64(completion.CachedTokens),
+		String(attrModel, a.modelName), String(attrTokenType, tokenTypeCached))
+	a.meter.RecordDuration(ctx, metricTurnDuration, elapsed.Seconds(),
+		String(attrModel, a.modelName), String(attrStopReason, completion.StopReason))
+
 	_ = a.journal.RecordActivity(ctx, fmt.Sprintf(
-		"tarefa=%s tela=%d iteracao=%d turnos=%d duracao=%s tokens=%d/%d cache=%d custo=US$%.4f parada=%s ferramentas=%s",
+		"tarefa=%s tela=%d iteracao=%d turnos=%d duracao=%s tokens=%d/%d cache=%d custo=US$%.4f parada=%s ferramentas=%s%s",
 		task.ID, task.Screen, iteration+1, task.TurnsUsed,
 		elapsed.Round(time.Millisecond),
 		completion.PromptTokens, completion.CompletionTokens, completion.CachedTokens,
 		task.CostUSD,
-		completion.StopReason, toolNames))
+		completion.StopReason, toolNames, a.traceSuffix(ctx)))
+}
+
+// traceSuffix devolve os identificadores do trace, prontos para colar no fim de
+// uma linha de diário — ou vazio, quando não há trace.
+//
+// Vai no FIM da linha, e não no começo, por dois motivos. O formato já é
+// `chave=valor` separado por espaço, então dois campos a mais não quebram quem
+// faz `tail` nem quem corta por coluna. E o começo da linha é onde o olho
+// procura a tarefa e a tela; empurrá-los para a direita com 32 caracteres de
+// hexadecimal tornaria o arquivo pior de ler para ganhar nada.
+//
+// Sem trace, devolve string vazia e a linha sai exatamente como saía antes. É o
+// que mantém o arquivo íntegro numa máquina sem telemetria configurada, que é
+// justamente quando ele é a única observabilidade que existe.
+func (a *Agent) traceSuffix(ctx context.Context) string {
+	traceID, spanID := a.tracer.TraceContext(ctx)
+	if traceID == "" {
+		return ""
+	}
+	return fmt.Sprintf(" trace_id=%s span_id=%s", traceID, spanID)
 }
 
 // systemPromptWithLessons devolve a instrução de sistema com as lições anexadas.
@@ -468,6 +520,14 @@ func (a *Agent) accrueCost(task *domain.Task, completion *ports.Completion) *Gua
 		return nil
 	}
 	task.CostUSD += turnCost
+	// O gasto do TURNO, não o acumulado da tarefa: contador é monotônico, e
+	// somar o acumulado a cada turno contaria o mesmo dinheiro várias vezes.
+	// O total do período o backend deriva sozinho.
+	//
+	// `context.Background()` porque `accrueCost` não recebe contexto — e não
+	// vale mudar sete assinaturas para carregar um valor que a métrica não usa:
+	// diferente do trecho, ela não se pendura em nada.
+	a.meter.AddFloat(context.Background(), metricCostUSD, turnCost, String(attrModel, a.modelName))
 
 	if task.CostUSD < costCapUSD {
 		return nil

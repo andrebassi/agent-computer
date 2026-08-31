@@ -58,6 +58,15 @@ type Agent struct {
 	// modelName é o que a tabela de preços usa como chave. Vazio faz todo
 	// modelo ficar sem preço, e portanto sem teto.
 	modelName string
+	// tracer observa o percurso da tarefa para fora. Nunca é nil — o padrão
+	// descarta tudo, pelo mesmo motivo do sink e do journal: telemetria que
+	// exige checagem de nil vira pânico dentro do laço no dia em que alguém
+	// esquecer uma, e derrubar a tarefa por causa da observação é o oposto do
+	// que a observação serve.
+	tracer Tracer
+	// meter registra as medidas agregáveis. Nunca é nil — o padrão descarta,
+	// pelo mesmo motivo do tracer.
+	meter Meter
 	// trackedSecrets são os valores a apagar do histórico se reaparecerem.
 	//
 	// Ficam SÓ em memória: o campo correspondente na conversa é não-exportado,
@@ -188,6 +197,8 @@ func NewAgent(
 		sink:    discardSink{},
 		journal: discardJournal{},
 		cost:    noCost{},
+		tracer:  discardTracer{},
+		meter:   discardMeter{},
 	}
 	for _, opt := range opts {
 		opt(agent)
@@ -203,17 +214,42 @@ func NewAgent(
 // o mesmo teclado produzem cliques intercalados que não falham — só fazem a
 // coisa errada.
 func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
+	// O trecho abre ANTES da trava, e não depois: esperar a tela vagar é parte
+	// do tempo da tarefa, e é justamente o que se quer enxergar quando uma
+	// demora sem explicação aparecer. Fechá-lo fora dessa espera esconderia a
+	// única evidência de contenção entre tarefas.
+	ctx, span := a.tracer.Start(ctx, spanTask,
+		String(attrTaskID, task.ID),
+		Int(attrScreen, task.Screen),
+		Bool(attrResumed, false),
+	)
+	// Sobe agora e desce no retorno. UpDown, e não contador: a pergunta é
+	// "quantas rodam AGORA", e um contador monotônico daria uma linha sempre
+	// subindo, que não responde nada.
+	//
+	// Medido aqui, no agente, e não no supervisor: assim vale para o CLI
+	// também, que é o caminho mais usado desta máquina e o que não deixa rastro
+	// no journald.
+	a.meter.AddUpDown(ctx, metricTasksRunning, 1)
+	defer a.meter.AddUpDown(ctx, metricTasksRunning, -1)
+
+	var runErr error
+	defer func() { span.End(runErr) }()
+
 	release, err := a.lock.Acquire(ctx, task.Screen, task.ID)
 	if err != nil {
-		return fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
+		runErr = fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
+		return runErr
 	}
 	defer func() { _ = release() }()
 
 	if err := task.Start(a.clock()); err != nil {
-		return err
+		runErr = err
+		return runErr
 	}
 	if err := a.persist(ctx, task); err != nil {
-		return err
+		runErr = err
+		return runErr
 	}
 
 	conv, err := a.store.LoadConversation(ctx, task.ID)
@@ -229,7 +265,8 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 		conv.AddUser(task.Prompt)
 	}
 
-	return a.iterate(ctx, task, conv)
+	runErr = a.iterate(ctx, task, conv)
+	return runErr
 }
 
 // iterate é O laço do agente — um só, usado tanto pelo início quanto pela
@@ -296,6 +333,17 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 		// mais repete.
 		costHit := a.accrueCost(task, completion)
 		a.recordTurn(ctx, task, i, completion, a.clock().Sub(turnStarted))
+
+		// O acumulado da tarefa, turno a turno.
+		//
+		// É o que transforma "esta tarefa custou US$ 0,04" em "ela chegou a
+		// US$ 0,04 na décima volta, subindo linear" — a diferença entre saber o
+		// total e saber se o teto vai ser atingido. Os mesmos números que o
+		// `activity.log` já registra, agora com o eixo do tempo junto.
+		a.tracer.AddEvent(ctx, eventTurn,
+			Int(attrTurnsUsed, task.TurnsUsed),
+			Float64(attrCostUSD, task.CostUSD),
+		)
 		if costHit != nil {
 			if err := a.applyHit(ctx, task, conv, costHit); err != nil {
 				return err
@@ -390,7 +438,43 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 // histórico reescreve o prefixo cacheado e faz pagar preço cheio justamente
 // pelos tokens que a compressão tentaria economizar. Comprimir só quando o
 // modelo recusa é o que mantém o cache útil.
+// O trecho abre AQUI, no serviço, e não dentro do adaptador da xAI.
+//
+// Poderia abrir lá — é onde os tokens nascem —, mas isso obrigaria o adaptador
+// a conhecer o rastreador, e a instrumentação passaria a atravessar o porto.
+// Aqui ele já recebe tudo de que precisa: `ports.Completion` traz tokens, cache
+// e motivo de parada.
+//
+// O que se perde é enxergar cada TENTATIVA do retry separadamente — o trecho
+// cobre a compactação e a segunda chamada como um bloco só. É perda real e
+// aceita: a alternativa custaria furar a direção das setas para ver um detalhe
+// que o próprio `errors.Is` abaixo já classifica.
 func (a *Agent) complete(ctx context.Context, conv *domain.Conversation, specs []ports.ToolSpec) (*ports.Completion, error) {
+	ctx, span := a.tracer.Start(ctx, spanChat+" "+a.modelName,
+		String(attrGenAIOperation, "chat"),
+		String(attrGenAISystem, genAISystemXai),
+		String(attrGenAIRequestModel, a.modelName),
+	)
+	completion, err := a.completeInner(ctx, conv, specs)
+	if completion != nil {
+		// Só número e enum. NADA de `completion.Content`: a resposta do modelo
+		// pode conter qualquer coisa que ele leu na tela ou numa API, e
+		// telemetria SAI da máquina — diferente da conversa, que fica no volume
+		// com permissão de arquivo.
+		span.SetAttributes(
+			Int(attrGenAIInputTokens, completion.PromptTokens),
+			Int(attrGenAIOutputTokens, completion.CompletionTokens),
+			Int(attrCachedTokens, completion.CachedTokens),
+			String(attrGenAIFinishReason, completion.StopReason),
+		)
+	}
+	span.End(err)
+	return completion, err
+}
+
+// completeInner é o corpo original: chama o modelo e, se a janela de contexto
+// estourar, encurta o histórico e tenta DE NOVO — uma vez só.
+func (a *Agent) completeInner(ctx context.Context, conv *domain.Conversation, specs []ports.ToolSpec) (*ports.Completion, error) {
 	completion, err := a.model.Complete(ctx, conv.Messages, specs)
 	if !errors.Is(err, ports.ErrContextTooLong) {
 		return completion, err
@@ -437,6 +521,17 @@ func (a *Agent) settle(ctx context.Context, task *domain.Task, conv *domain.Conv
 // Não devolve erro, pelo mesmo contrato do `publish`: registrar é efeito
 // colateral, e um disco cheio não pode transformar tarefa concluída em falha.
 func (a *Agent) recordOutcome(ctx context.Context, task *domain.Task, conv *domain.Conversation) {
+	// Aqui, e não em cada ponto de saída: este é o ÚNICO lugar por onde toda
+	// tarefa passa ao parar — propriedade que o comentário desta função já
+	// registra, e que é o que torna a contagem confiável. Instrumentar os sete
+	// pontos de saída daria o mesmo número enquanto ninguém acrescentasse o
+	// oitavo.
+	//
+	// O estado é enum de três valores. Esta métrica responde de uma vez a
+	// pergunta que motivou o trabalho todo: 31 de 123 tarefas terminaram
+	// `blocked`, e ninguém sabia.
+	a.meter.AddCount(ctx, metricTaskOutcomes, 1, String(attrTaskState, string(task.State)))
+
 	line := fmt.Sprintf("tarefa=%s tela=%d estado=%s turnos=%d",
 		task.ID, task.Screen, task.State, task.TurnsUsed)
 	switch task.State {
@@ -485,6 +580,31 @@ func (a *Agent) publish(ctx context.Context, task *domain.Task, conv *domain.Con
 // Resume devolve o controle ao agente depois que a pessoa resolveu o passo
 // sensível, e continua a tarefa de onde ela parou.
 func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string) error {
+	// Trecho NOVO, e não filho do trecho da execução original.
+	//
+	// A retomada pode acontecer noutro processo, horas ou dias depois — o que
+	// se está esperando é uma pessoa digitar uma senha. Pendurá-la no trace
+	// anterior exigiria carregar aquele contexto do disco e produziria um trace
+	// cuja duração é o tempo que o humano demorou, e não o tempo de trabalho.
+	// A ligação entre as duas execuções é o atributo com o id da tarefa.
+	ctx, span := a.tracer.Start(ctx, spanTask,
+		String(attrTaskID, task.ID),
+		Int(attrScreen, task.Screen),
+		Bool(attrResumed, true),
+	)
+	// Sobe agora e desce no retorno. UpDown, e não contador: a pergunta é
+	// "quantas rodam AGORA", e um contador monotônico daria uma linha sempre
+	// subindo, que não responde nada.
+	//
+	// Medido aqui, no agente, e não no supervisor: assim vale para o CLI
+	// também, que é o caminho mais usado desta máquina e o que não deixa rastro
+	// no journald.
+	a.meter.AddUpDown(ctx, metricTasksRunning, 1)
+	defer a.meter.AddUpDown(ctx, metricTasksRunning, -1)
+
+	var resumeErr error
+	defer func() { span.End(resumeErr) }()
+
 	// A TRAVA VEM PRIMEIRO, antes de mexer no estado.
 	//
 	// A ordem inversa custava a tarefa inteira: `task.Resume` mudava para
@@ -497,21 +617,25 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 	// `blocked`, e quem chamou tenta de novo quando a tela vagar.
 	release, err := a.lock.Acquire(ctx, task.Screen, task.ID)
 	if err != nil {
-		return fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
+		resumeErr = fmt.Errorf("tomando a tela %d: %w", task.Screen, err)
+		return resumeErr
 	}
 	defer func() { _ = release() }()
 
 	if err := task.Resume(a.clock()); err != nil {
-		return err
+		resumeErr = err
+		return resumeErr
 	}
 	_ = a.screen.ClearTakeover(ctx, task.Screen)
 
 	conv, err := a.store.LoadConversation(ctx, task.ID)
 	if err != nil {
-		return fmt.Errorf("carregando conversa: %w", err)
+		resumeErr = fmt.Errorf("carregando conversa: %w", err)
+		return resumeErr
 	}
 	if conv == nil {
-		return fmt.Errorf("conversa da tarefa %s não encontrada", task.ID)
+		resumeErr = fmt.Errorf("conversa da tarefa %s não encontrada", task.ID)
+		return resumeErr
 	}
 	// A conversa vem do disco, e os segredos NÃO vêm junto — o campo é
 	// não-exportado para não ser serializado. Rearmar aqui é o que impede a
@@ -529,10 +653,12 @@ func (a *Agent) Resume(ctx context.Context, task *domain.Task, humanNote string)
 		return err
 	}
 	if err := a.persist(ctx, task); err != nil {
-		return err
+		resumeErr = err
+		return resumeErr
 	}
 
-	return a.iterate(ctx, task, conv)
+	resumeErr = a.iterate(ctx, task, conv)
+	return resumeErr
 }
 
 // toolSpecs monta a lista de ferramentas oferecidas ao modelo, em ordem estável.

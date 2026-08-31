@@ -17,6 +17,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/telemetry"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
@@ -36,6 +37,14 @@ import (
 // O arquivo entra no prompt de sistema de toda tarefa. 4 KB cabe algumas dezenas
 // de lições e custa pouco perto do histórico, que vai a centenas de KB.
 const maxGuardrailsBytes = 4096
+
+// agentVersion identifica a build no recurso da telemetria.
+//
+// Existe para que um trecho estranho no backend possa ser atribuído a uma versão
+// do binário: sem isso, "isso começou depois do último deploy" é palpite, e o
+// deploy aqui é manual e frequente. Sobe a cada mudança que valha diferenciar
+// no gráfico -- não a cada commit.
+const agentVersion = "0.1.0"
 
 type deps struct {
 	model    ports.LanguageModel
@@ -59,6 +68,24 @@ type deps struct {
 	// taskBudget é quanto tempo uma tarefa tem, para o detector de tempo de
 	// parede saber a FRAÇÃO consumida. Zero desliga o detector.
 	taskBudget time.Duration
+	// tracer observa o percurso da tarefa. Nil quando não há endpoint
+	// configurado, e nesse caso o serviço usa o rastreador mudo dele.
+	tracer service.Tracer
+	// meter registra as medidas agregáveis. Nil sem endpoint configurado.
+	meter service.Meter
+	// flushMetrics esvazia as métricas pendentes antes de o processo sair.
+	//
+	// SEPARADO do flush de trechos porque os dois provedores do OpenTelemetry
+	// são independentes: encerrar um não esvazia o outro, e o esquecido perde
+	// exatamente a última janela — que num encerramento é a que explica por que
+	// ele aconteceu.
+	flushMetrics telemetry.Shutdown
+	// flushTelemetry esvazia a fila de trechos antes de o processo sair.
+	//
+	// Nunca é nil: sem endpoint, é um no-op. Isso evita a checagem em cada
+	// caminho de saída — e é justamente num caminho de saída que a checagem
+	// esquecida vira pânico.
+	flushTelemetry telemetry.Shutdown
 }
 
 // buildDeps monta o que não depende do texto da tarefa.
@@ -163,6 +190,53 @@ func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, err
 	// Só o que PEDE AÇÃO é enfileirado. Avisar de tudo ensina quem recebe a
 	// ignorar, inclusive o pedido de take-over.
 	d.sink = events.OnlyKinds(spool, domain.EventBlocked, domain.EventFailed)
+
+	// Telemetria por último, e sem poder derrubar nada.
+	//
+	// O endpoint vem do ambiente porque o valor muda com a máquina que observa,
+	// não com o código. Vazio é o caso normal: sem ele o agente roda igual, com
+	// o rastreador mudo do serviço.
+	//
+	// A falha aqui NÃO é fatal, e segue o molde que este arquivo já usa para
+	// preço e catálogo de runners: avisa em stderr e continua. Um backend de
+	// observação fora do ar não pode impedir o trabalho de acontecer — seria a
+	// observação derrubando o observado.
+	tracer, flush, telemetryErr := telemetry.New(
+		context.Background(),
+		os.Getenv("AGENTD_OTLP_ENDPOINT"),
+		"agentd",
+		agentVersion,
+	)
+	meter, flushMeter, meterErr := telemetry.NewMeter(
+		context.Background(),
+		os.Getenv("AGENTD_OTLP_METRICS_ENDPOINT"),
+		"agentd",
+		agentVersion,
+	)
+	if meterErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: métricas desligadas: %v\n", meterErr)
+		d.flushMetrics = func(context.Context) error { return nil }
+	} else {
+		if meter != nil {
+			d.meter = meter
+		}
+		d.flushMetrics = flushMeter
+	}
+
+	if telemetryErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: telemetria desligada: %v\n", telemetryErr)
+		d.flushTelemetry = func(context.Context) error { return nil }
+	} else {
+		// Atribuição condicional: `telemetry.New` devolve nil quando não há
+		// endpoint, e passar um nil tipado para `service.WithTracer` faria a
+		// checagem de nil de lá falhar — a interface não seria nil, o ponteiro
+		// dentro dela sim, e o pânico viria na primeira chamada.
+		if tracer != nil {
+			d.tracer = tracer
+		}
+		d.flushTelemetry = flush
+	}
+
 	return d, nil
 }
 
@@ -225,6 +299,8 @@ func (d *deps) agentFactory() api.AgentFactory {
 			service.WithGuardrailJournal(d.journal),
 			service.WithTaskBudget(d.taskBudget),
 			service.WithCostEstimator(d.prices, d.modelName),
+			service.WithTracer(d.tracer),
+			service.WithMeter(d.meter),
 			// Arma a redação com os segredos dos conectores ANEXADOS. Sem isto o
 			// mecanismo existia inteiro e percorria uma lista vazia.
 			service.WithTrackedSecrets(d.registry.SecretsFor(context.Background(), request.Connectors)))

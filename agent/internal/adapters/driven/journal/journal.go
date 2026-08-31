@@ -44,6 +44,19 @@ const (
 	// Erro de ferramenta traz saída grande junto; sem corte, uma lição sozinha
 	// encheria o teto do arquivo e expulsaria todas as outras.
 	maxLessonBytes = 400
+
+	// maxFileBytes é o tamanho em que um arquivo de diário é rotacionado.
+	//
+	// Até 31/08/2026 NÃO havia rotação nenhuma: `activity.log`, `errors.log` e
+	// `progress.md` cresciam para sempre. Medido naquele dia, com a máquina
+	// ainda nova: 55 KB, 34 KB e 27 KB em ~4 h de uso, ou seja, na ordem de
+	// centenas de KB por dia de trabalho. O volume durável tem 18 GB livres,
+	// então isso não enche o disco em prazo humano — mas o arquivo cresce até
+	// deixar de ser lido, que é a forma como um log morre.
+	//
+	// 8 MiB é escolhido para caber num `tail` sem esforço e ainda guardar
+	// semanas do volume medido.
+	maxFileBytes = 8 << 20
 )
 
 // Journal grava os quatro arquivos.
@@ -95,6 +108,16 @@ func (j *Journal) appendLine(path, line string) error {
 	if err := os.MkdirAll(j.dir, dirMode); err != nil {
 		return fmt.Errorf("criando %s: %w", j.dir, err)
 	}
+	// A rotação acontece ANTES da escrita, e não depois.
+	//
+	// Depois deixaria o arquivo passar do teto pela última linha — irrelevante
+	// no tamanho, mas a ordem importa por outro motivo: rodando antes, a linha
+	// recém-escrita está sempre no arquivo ATUAL. Quem acabou de rodar um
+	// comando e faz `tail activity.log` vê o que acabou de fazer, em vez de ter
+	// de descobrir que foi para o `.1`.
+	if err := rotateIfLarge(path); err != nil {
+		return err
+	}
 	handle, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
 		return fmt.Errorf("abrindo %s: %w", filepath.Base(path), err)
@@ -105,6 +128,29 @@ func (j *Journal) appendLine(path, line string) error {
 	clean := strings.ReplaceAll(strings.TrimSpace(line), "\n", " ")
 	if _, err := fmt.Fprintf(handle, "[%s] %s\n", j.stamp(), clean); err != nil {
 		return fmt.Errorf("gravando em %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+// rotateIfLarge renomeia o arquivo para `.1` quando ele passa do teto.
+//
+// UMA geração só, e o `.1` anterior é sobrescrito. Guardar N gerações exigiria
+// renomear em cascata a cada rotação e traria a pergunta de quantas manter; o
+// que se quer aqui é impedir crescimento sem fim, e o histórico de verdade está
+// no backend de telemetria, que é onde se consulta série longa.
+//
+// Arquivo ausente não é erro: é o primeiro uso, e `os.Stat` falhando por
+// qualquer outro motivo também não pode derrubar a escrita — perder a rotação é
+// muito menos grave que perder a linha de log que a provocou.
+func rotateIfLarge(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < maxFileBytes {
+		return nil
+	}
+	// `os.Rename` é atômico no mesmo sistema de arquivos: nenhum leitor vê um
+	// instante em que o arquivo não existe.
+	if err := os.Rename(path, path+".1"); err != nil {
+		return fmt.Errorf("rotacionando %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

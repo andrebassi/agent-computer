@@ -92,9 +92,34 @@ func (a *Agent) allConcurrent(calls []domain.ToolCall) bool {
 // Essa abstinência é o que a torna segura para rodar em goroutine: tudo que ela
 // devolve vai para uma posição própria do vetor, e a mutação de estado acontece
 // depois, em ordem, no consumidor.
+// A instrumentação daqui é o que responde "onde foi o tempo".
+//
+// Até agora o repositório inteiro media duração em DOIS lugares — o turno do
+// modelo e o relógio do guardrail —, e nenhuma ferramenta era cronometrada. Com
+// isso, "a tarefa demorou 4 minutos" não se decompunha: não dava para saber se
+// foi o modelo pensando, o navegador carregando ou um comando pendurado.
 func (a *Agent) executeTool(ctx context.Context, task *domain.Task, call domain.ToolCall) toolOutcome {
+	ctx, span := a.tracer.Start(ctx, spanExecuteTool+" "+call.Name,
+		String(attrGenAIOperation, "execute_tool"),
+		String(attrGenAIToolName, call.Name),
+		String(attrGenAIToolCallID, call.ID),
+		// O HASH dos argumentos, nunca os argumentos.
+		//
+		// Reaproveita a chave do detector de laço, então o número que aparece
+		// aqui é o MESMO que ele compara — dá para ver no trace que três
+		// chamadas eram idênticas sem que o comando escrito pelo modelo saia da
+		// máquina. Um argumento de shell pode conter caminho, credencial
+		// colada por engano, ou o conteúdo de um arquivo.
+		String(attrToolArgsHash, failureKey(call.Name, call.Arguments)),
+	)
+
 	tool, ok := a.tools[call.Name]
 	if !ok {
+		// Nome inventado pelo modelo. É sinal, não erro do sistema: o trecho
+		// fecha sem erro, com a marca, para não poluir a taxa de falha com o que
+		// é comportamento conhecido do modelo.
+		span.SetAttributes(Bool(attrToolUnknown, true))
+		span.End(nil)
 		return toolOutcome{call: call}
 	}
 	// Status por chamada só no caminho SERIAL: no paralelo, a linha única já foi
@@ -102,7 +127,30 @@ func (a *Agent) executeTool(ctx context.Context, task *domain.Task, call domain.
 	if !tool.Spec().Concurrent {
 		_ = a.screen.ShowStatus(ctx, task.Screen, fmt.Sprintf("tela %d: %s", task.Screen, call.Name))
 	}
+	startedAt := a.clock()
 	result, err := tool.Execute(ctx, task.Screen, call.Arguments)
+	// A duração por ferramenta é o número que faltava: até agora "a tarefa
+	// demorou" não se decompunha em modelo, navegador e shell. Histograma e não
+	// média — uma chamada de 40 s entre noventa de 2 s desaparece numa média, e
+	// é ela que alguém está tentando explicar.
+	//
+	// O nome da ferramenta é rótulo seguro: são nove fixas mais as dos
+	// conectores instalados, que o operador controla. Os ARGUMENTOS ficam de
+	// fora, aqui como no trecho.
+	failed := result != nil && result.Failed
+	a.meter.RecordDuration(ctx, metricToolDuration, a.clock().Sub(startedAt).Seconds(),
+		String(attrToolName, call.Name), Bool(attrToolFailed, failed))
+
+	// `Failed` vira ATRIBUTO, não status de erro do trecho.
+	//
+	// Ferramenta que falha não derruba a tarefa — `grep` sem resultado devolve
+	// 1, e isso é rotina. Marcar o trecho como erro poria toda tarefa saudável
+	// na taxa de erro, e a primeira reação de quem olhasse o painel seria
+	// desligar o alerta. Só o `err` do porto, que é falha de verdade, marca.
+	if result != nil {
+		span.SetAttributes(Bool(attrToolFailed, result.Failed))
+	}
+	span.End(err)
 	return toolOutcome{call: call, result: result, err: err, known: true}
 }
 
@@ -149,6 +197,17 @@ func (a *Agent) applyOutcome(ctx context.Context, task *domain.Task, conv *domai
 	if err := conv.AddToolResult(out.call.ID, out.result.Output); err != nil {
 		return true, err
 	}
+	// O pedido de ajuda é o evento mais importante que esta máquina produz: é o
+	// único que exige uma PESSOA. Marcá-lo no trecho é o que permite responder
+	// "quanto tempo esta tarefa passou esperando alguém" sem abrir a conversa.
+	//
+	// Só o motivo, que é enum fechado de seis. O `req.Detail` fica de fora: ele
+	// descreve a barreira que o modelo encontrou e pode citar o conteúdo da
+	// página — inclusive de uma tela de login.
+	a.tracer.AddEvent(ctx, eventTakeoverRequested,
+		String(attrBlockReason, string(req.Reason)),
+	)
+
 	_ = a.screen.RequestTakeover(ctx, task.Screen, req.Reason, req.Detail)
 	_ = a.screen.ShowStatus(ctx, task.Screen, task.StatusLine())
 	return true, nil

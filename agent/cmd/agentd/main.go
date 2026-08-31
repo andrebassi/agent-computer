@@ -25,6 +25,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/screen"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/skills"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/store"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/telemetry"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
@@ -182,6 +183,14 @@ func run(o runOptions) error {
 		if err != nil {
 			return err
 		}
+		// O flush é `defer` AQUI DENTRO, e não em `main`.
+		//
+		// `main` sai por `os.Exit` no caminho de erro, e `os.Exit` NÃO roda
+		// defer: um flush registrado lá seria pulado exatamente quando os
+		// últimos trechos são os mais interessantes, que é quando algo falhou.
+		// Dentro de `run` ele roda no retorno, antes de `main` decidir o código
+		// de saída.
+		defer flushTelemetry(d)
 		tokenPath := o.tokenFile
 		if tokenPath == "" {
 			tokenPath = stateDir + "/api-token"
@@ -347,13 +356,67 @@ func run(o runOptions) error {
 		effectiveModel = xai.DefaultModel()
 	}
 
-	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
+	// Telemetria vale no CLI também, e aqui ela é ainda mais necessária: uma
+	// tarefa disparada por SSH não deixa NADA no journald — a saída cai na
+	// sessão e some quando ela fecha. Sem isto, o único rastro do caminho mais
+	// usado da máquina seria o `activity.log`.
+	cliTracer, flushCLI, telemetryErr := telemetry.New(
+		context.Background(),
+		os.Getenv("AGENTD_OTLP_ENDPOINT"),
+		"agentd",
+		agentVersion,
+	)
+	cliMeter, flushCLIMetrics, meterErr := telemetry.NewMeter(
+		context.Background(),
+		os.Getenv("AGENTD_OTLP_METRICS_ENDPOINT"),
+		"agentd",
+		agentVersion,
+	)
+	if meterErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: métricas desligadas: %v\n", meterErr)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
+			defer cancel()
+			if err := flushCLIMetrics(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "aviso: métricas não esvaziaram: %v\n", err)
+			}
+		}()
+	}
+	if telemetryErr != nil {
+		fmt.Fprintf(os.Stderr, "aviso: telemetria desligada: %v\n", telemetryErr)
+	} else {
+		// `defer` aqui é seguro: estamos em `run`, e o `os.Exit` que pularia o
+		// defer está em `main`, depois do retorno desta função.
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
+			defer cancel()
+			if err := flushCLI(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "aviso: telemetria não esvaziou a fila: %v\n", err)
+			}
+		}()
+	}
+
+	agentOptions := []service.Option{
 		service.WithEventSink(eventSink),
 		service.WithGuardrailJournal(taskJournal),
 		service.WithCostEstimator(priceTable, effectiveModel),
 		// Pelo CLI a redação vale igual: é a mesma máquina, e o segredo do
 		// conector pode reaparecer numa saída de comando do mesmo jeito.
-		service.WithTrackedSecrets(registry.SecretsFor(context.Background(), request.Connectors)))
+		service.WithTrackedSecrets(registry.SecretsFor(context.Background(), request.Connectors)),
+	}
+	// Condicional porque `telemetry.New` devolve nil sem endpoint, e um ponteiro
+	// nil dentro de interface não é interface nil — a checagem de `WithTracer`
+	// deixaria passar, e o pânico viria na primeira chamada do laço.
+	if cliTracer != nil {
+		agentOptions = append(agentOptions, service.WithTracer(cliTracer))
+	}
+	if cliMeter != nil {
+		agentOptions = append(agentOptions, service.WithMeter(cliMeter))
+	}
+
+	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,
+		agentOptions...)
 
 	// Ctrl+C precisa liberar a trava da tela: sem isto, uma interrupção deixaria
 	// a tela travada até alguém apagar o arquivo à mão.
@@ -451,4 +514,33 @@ func resumeTask(ctx context.Context, agent *service.Agent, taskStore *store.File
 		return nil
 	}
 	return resumeErr
+}
+
+// flushTelemetry esvazia a fila de trechos, com teto de tempo próprio.
+//
+// O teto existe porque o backend pode estar inalcançável — o Mac que o hospeda é
+// um laptop, e ele vai estar fechado. A unidade systemd concede 40s antes do
+// SIGKILL, e esses 40s são para as TAREFAS gravarem estado e soltarem a trava.
+// Telemetria esperando um destino morto não pode consumir esse orçamento.
+//
+// A falha é reportada e engolida: não há o que fazer com ela nesse ponto, e
+// transformar "não consegui enviar telemetria" em código de saída diferente de
+// zero faria um encerramento correto parecer defeito.
+func flushTelemetry(d *deps) {
+	if d == nil || d.flushTelemetry == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
+	defer cancel()
+	if err := d.flushTelemetry(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "aviso: telemetria não esvaziou a fila: %v\n", err)
+	}
+	// O medidor tem provedor PRÓPRIO: encerrar o de trechos não esvazia o dele,
+	// e o esquecido perderia a última janela de métrica — justamente a que
+	// explica por que o encerramento aconteceu.
+	if d.flushMetrics != nil {
+		if err := d.flushMetrics(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "aviso: métricas não esvaziaram: %v\n", err)
+		}
+	}
 }

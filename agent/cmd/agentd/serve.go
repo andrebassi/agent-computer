@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,7 +41,7 @@ func serve(ctx context.Context, d *deps, listenAddr, tokenFile string, taskTimeo
 		return err
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := newLogger()
 	logger.Info("token da porta HTTP carregado", "origem", tokenSource)
 
 	// O detector de tempo de parede precisa saber quanto tempo a tarefa TEM,
