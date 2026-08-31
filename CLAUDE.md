@@ -365,12 +365,41 @@ A máquina **empurra**; nada nela escuta. É o que preserva o invariante que
 ssh -N -f -R 4317:127.0.0.1:4317 -R 8428:127.0.0.1:8428 -R 9428:127.0.0.1:9428 root@<ip>
 ```
 
-⚠️ O Tailscale da máquina está **`Logged out`** (medido em 31/08/2026): o
-`tailscaled` roda, mas o nó não está autenticado. Religá-lo exige `tailscale up`,
-que é interativo por decisão do repositório. Até lá, o túnel é o caminho.
-
 ⚠️ Expor as portas do backend no IP público **não** é alternativa: elas são de
 laboratório em loopback e não têm autenticação.
+
+### `AGENT_NETWORK` escolhe o caminho — e os modos declarados não caem
+
+| Modo | O que faz | Falha quando |
+|---|---|---|
+| `auto` | **padrão** — tenta a malha, cai para o IP público sem reclamar | nunca (é o ponto, e o problema) |
+| `tailscale` | exige a malha | o nó não está nela — e **diz**, em vez de cair |
+| `ssh` | força o IP público mesmo com a malha no ar | o droplet não existe |
+| `cloudflared` | usa `CLOUDFLARE_TUNNEL_HOSTNAME` | o hostname não foi definido |
+
+A reserva silenciosa do `auto` é o comportamento histórico e continua o padrão,
+mas ela **esconde**: uma malha caída se parece com uma malha funcionando, e o
+diagnóstico procura defeito onde não há. Os modos declarados existem para isso —
+`task route` diz o endereço **e o modo**, porque em `auto` os dois casos
+produzem o mesmo `100.x`.
+
+```bash
+task route                       # por onde o acesso está indo, e em que modo
+AGENT_NETWORK=tailscale task network   # provisiona: authkey do cofre, por SSH de root
+```
+
+🛑 **A credencial nunca vai pelo cloud-init.** O `user-data` é servido pelo
+metadata em `169.254.169.254`, que `docs/SECURITY.md:129` já registra como
+alcançável pela ferramenta de shell — ou seja, pelo modelo. Uma authkey ali seria
+legível por quem ela deveria conter, e com ela o modelo **adiciona nós ao tailnet
+pessoal do dono**: escalada para fora da máquina. Por isso a chave viaja por SSH
+de root depois do boot, entra pela ENTRADA do processo (nunca como argumento, que
+`ps` mostra) e é apagada assim que o `up` consome.
+
+⚠️ Duas coisas medidas em 31/08/2026: o nó `agent-computer` **já existe** na malha
+(`100.70.182.102`), apenas deslogado; e o **WARP roda no Mac**, o que mantém o
+Tailscale daqui `Stopped` — os dois são WireGuard e disputam rota e DNS. Sem o Mac
+na malha, `AGENT_NETWORK=tailscale` não tem para onde apontar.
 
 ## Convenções e armadilhas do repositório
 

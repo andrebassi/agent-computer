@@ -315,6 +315,21 @@ tasks:
         load_token
         agent_ssh 'journalctl -u agentd-api.service -n 60 --no-pager'
 
+  network:
+    desc: "Provisiona o transporte de AGENT_NETWORK (auto|tailscale|ssh|cloudflared) — a credencial nunca passa pelo cloud-init"
+    cmds:
+      - mkdir -p logs
+      - ./scripts/47-network-setup.sh 2>&1 | tee logs/network-setup.log
+
+  route:
+    desc: Diz por qual caminho o acesso está indo e em que modo, em vez de adivinhar pelo formato do endereço
+    cmds:
+      # `load_token` é obrigatório antes de qualquer coisa que consulte a nuvem:
+      # sem ele o `doctl` falha calado, `droplet_ip` volta vazio e a rota reporta
+      # "o droplet não existe" para um droplet que existe. Medido — o falso
+      # negativo manda recriar o que está de pé.
+      - bash -c 'source scripts/lib.sh >/dev/null 2>&1; load_token >/dev/null 2>&1; agent_route'
+
   deploy:
     desc: Compila o agentd e o instala em /usr/local/bin, por SSH de root — o gate de cobertura roda antes
     cmds:

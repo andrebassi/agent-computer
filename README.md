@@ -726,6 +726,42 @@ A reserva é silenciosa e **testada nos três cenários**: malha no ar, nó offl
 nela, e cliente ausente da máquina. Uma malha caída não pode impedir o acesso a
 um computador que está de pé.
 
+### `AGENT_NETWORK` — quando a reserva silenciosa atrapalha
+
+A reserva resolve o caso comum e **esconde o caso raro**: uma malha caída se
+parece com uma malha funcionando, e o diagnóstico vai procurar defeito onde não
+há. `AGENT_NETWORK` declara a intenção, e os modos declarados **não caem**.
+
+| Modo | Faz | Falha quando |
+|---|---|---|
+| `auto` | **padrão** — malha, senão IP público | nunca |
+| `tailscale` | exige a malha | o nó não está nela, e **diz** |
+| `ssh` | força o IP público mesmo com a malha no ar | o droplet não existe |
+| `cloudflared` | usa `CLOUDFLARE_TUNNEL_HOSTNAME` | o hostname não foi definido |
+
+```
+$ task route
+IP público (165.22.35.97, modo auto)
+
+$ AGENT_NETWORK=tailscale task route
+🛑 AGENT_NETWORK=tailscale, mas o nó 'agent-computer' não está na malha.
+   Sem queda para o IP público: o modo declarado existe para não esconder isto.
+```
+
+O modo entra na saída porque o endereço sozinho não distingue **escolhi a malha**
+de **caí nela** — em `auto` os dois imprimem o mesmo `100.x`.
+
+`cloudflared` cobre o caso que a malha não cobre: alguém alcançar a tela **sem
+entrar no tailnet**. O preço é que o hostname é público e o tráfego passa pela
+Cloudflare, então a política de Access na frente não é opcional.
+
+🛑 **A credencial não vai pelo cloud-init.** O `user-data` é servido pelo metadata
+em `169.254.169.254`, alcançável pela ferramenta de shell — logo pelo modelo. Uma
+authkey ali seria legível por quem ela deveria conter, e com ela o modelo
+**adiciona nós ao tailnet pessoal do dono**. `task network` a envia por SSH de
+root, pela entrada do processo (nunca como argumento, que `ps` mostra), e a apaga
+assim que o `up` consome.
+
 Ligar: `./scripts/15-tailscale-up.sh` imprime a URL de autorização. O script
 **não liga `--ssh`** de propósito — isso abriria acesso ao shell governado pela
 ACL do tailnet, que é decisão de segurança separada de "entrar na malha".

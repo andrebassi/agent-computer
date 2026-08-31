@@ -50,6 +50,35 @@ case "$AGENT_OS" in
   *) echo "🛑 AGENT_OS inválido: '$AGENT_OS' (use 'ubuntu' ou 'nixos')" >&2; return 1 2>/dev/null || exit 1 ;;
 esac
 
+# QUATRO caminhos de rede, escolhidos por AGENT_NETWORK:
+#
+#   auto        tenta a malha, cai para o IP público sem reclamar — o padrão
+#   tailscale   EXIGE a malha; falha alto se o nó não estiver nela
+#   ssh         força o IP público, ignorando a malha mesmo que ela esteja no ar
+#   cloudflared força o hostname do túnel Cloudflare
+#
+# O padrão é `auto` porque é o comportamento que já existia, e trocá-lo por um
+# dos modos exigentes quebraria toda máquina em uso. Mas `auto` tem um custo que
+# só aparece quando algo falha: a queda para o IP público é SILENCIOSA, então
+# uma malha caída se parece com uma malha funcionando, e o diagnóstico procura
+# defeito onde não há.
+#
+# É para isso que servem os modos declarados: `AGENT_NETWORK=tailscale` não cai
+# para lugar nenhum — ou vai pela malha, ou diz que não dá. Quem quer o
+# transporte estável quer saber quando ele não está lá.
+AGENT_NETWORK="${AGENT_NETWORK:-auto}"
+case "$AGENT_NETWORK" in
+  auto|tailscale|ssh|cloudflared) ;;
+  *) echo "🛑 AGENT_NETWORK inválido: '$AGENT_NETWORK' (use 'auto', 'tailscale', 'ssh' ou 'cloudflared')" >&2; return 1 2>/dev/null || exit 1 ;;
+esac
+
+# Hostname do túnel Cloudflare, usado quando AGENT_NETWORK=cloudflared.
+#
+# Sem padrão de propósito: um hostname inventado resolveria para a máquina de
+# outra pessoa, e a conexão tentaria autenticar lá. Vazio falha alto, que é o
+# comportamento certo para um endereço que ninguém pode adivinhar.
+CLOUDFLARE_TUNNEL_HOSTNAME="${CLOUDFLARE_TUNNEL_HOSTNAME:-}"
+
 # agent_os descobre qual sistema a máquina NO AR está rodando.
 #
 # Não confunde com $AGENT_OS: aquele é o que se quer criar, este é o que existe.
@@ -147,12 +176,22 @@ TAILSCALE_HOSTNAME="${TAILSCALE_HOSTNAME:-agent-computer}"
 # A escolha é silenciosa e com reserva: se a malha não estiver no ar, ou o nó
 # estiver offline nela, cai para o IP público sem reclamar. Uma malha caída não
 # pode impedir o acesso a uma máquina que está de pé.
-agent_host() {
+#
+# ⚠️ A reserva silenciosa vale só em `AGENT_NETWORK=auto`. Nos modos declarados
+# não há queda: o ponto deles é justamente falhar quando o transporte pedido não
+# está lá, em vez de entregar outro parecendo o certo.
+#
+# mesh_address devolve o endereço do computador na malha, ou vazio.
+#
+# Separada de `agent_host` porque as duas respondem perguntas diferentes: esta
+# diz se a malha alcança o nó, aquela decide por onde ir. Juntas, um modo que
+# exige a malha não teria como distinguir "não está na malha" de "caiu para o IP
+# público" — que é exatamente a confusão que AGENT_NETWORK existe para desfazer.
+mesh_address() {
+  command -v tailscale >/dev/null 2>&1 || return 0
   # `tailscale status` sai com código diferente de zero quando o serviço está
   # parado, e é assim que se distingue "malha caída" de "nó offline".
-  if command -v tailscale >/dev/null 2>&1; then
-    local meshAddress
-    meshAddress="$(timeout 8s tailscale status --json 2>/dev/null | python3 -c "
+  timeout 8s tailscale status --json 2>/dev/null | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
@@ -161,29 +200,70 @@ except Exception:
 if data.get('BackendState') != 'Running':
     raise SystemExit
 for peer in (data.get('Peer') or {}).values():
-    nome = (peer.get('HostName') or '').split('.')[0]
-    if nome == '$TAILSCALE_HOSTNAME' and peer.get('Online'):
-        ips = peer.get('TailscaleIPs') or []
-        if ips:
-            print(ips[0])
+    peerName = (peer.get('HostName') or '').split('.')[0]
+    if peerName == '$TAILSCALE_HOSTNAME' and peer.get('Online'):
+        addresses = peer.get('TailscaleIPs') or []
+        if addresses:
+            print(addresses[0])
         break
-" 2>/dev/null)"
-    if [ -n "$meshAddress" ]; then
-      echo "$meshAddress"
-      return 0
-    fi
-  fi
-  droplet_ip
+" 2>/dev/null
+}
+
+agent_host() {
+  local meshAddress
+  case "$AGENT_NETWORK" in
+    ssh)
+      # Força o IP público mesmo com a malha no ar. É o modo de diagnosticar a
+      # própria malha: sem ele, não há como provar que um defeito é dela.
+      droplet_ip
+      ;;
+    tailscale)
+      meshAddress="$(mesh_address)"
+      if [ -z "$meshAddress" ]; then
+        echo "🛑 AGENT_NETWORK=tailscale, mas o nó '$TAILSCALE_HOSTNAME' não está na malha." >&2
+        echo "   Estado local: $(timeout 8s tailscale status --json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("BackendState","?"))' 2>/dev/null || echo 'tailscale indisponível')" >&2
+        echo "   Sem queda para o IP público: o modo declarado existe para não esconder isto." >&2
+        return 1
+      fi
+      printf '%s\n' "$meshAddress"
+      ;;
+    cloudflared)
+      if [ -z "$CLOUDFLARE_TUNNEL_HOSTNAME" ]; then
+        echo "🛑 AGENT_NETWORK=cloudflared exige CLOUDFLARE_TUNNEL_HOSTNAME." >&2
+        echo "   Não há padrão possível: um hostname adivinhado é a máquina de outra pessoa." >&2
+        return 1
+      fi
+      printf '%s\n' "$CLOUDFLARE_TUNNEL_HOSTNAME"
+      ;;
+    *)
+      # auto — o comportamento histórico, com reserva silenciosa.
+      meshAddress="$(mesh_address)"
+      if [ -n "$meshAddress" ]; then
+        printf '%s\n' "$meshAddress"
+        return 0
+      fi
+      droplet_ip
+      ;;
+  esac
 }
 
 # Diz por qual caminho o acesso está indo, para o diagnóstico não virar
 # adivinhação quando algo falhar.
+#
+# O modo entra na resposta porque o endereço sozinho não distingue "escolhi a
+# malha" de "caí nela": em `auto` os dois produzem o mesmo `100.x`, e é a
+# diferença que importa quando algo falha.
 agent_route() {
-  local host; host="$(agent_host)"
+  local host
+  if ! host="$(agent_host)"; then
+    echo "sem rota — AGENT_NETWORK=$AGENT_NETWORK não está disponível"
+    return 1
+  fi
   case "$host" in
-    100.*) echo "malha Tailscale ($host)" ;;
+    100.*) echo "malha Tailscale ($host, modo $AGENT_NETWORK)" ;;
     "")    echo "sem rota — o droplet não existe" ;;
-    *)     echo "IP público ($host)" ;;
+    *.*.*[a-z]*) echo "túnel Cloudflare ($host, modo $AGENT_NETWORK)" ;;
+    *)     echo "IP público ($host, modo $AGENT_NETWORK)" ;;
   esac
 }
 
