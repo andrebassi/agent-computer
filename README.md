@@ -29,7 +29,7 @@ Lab — serve para testar o conceito, não para produção.
 | [Como usar, com um caso real](#como-usar-com-um-caso-real-do-começo-ao-fim) | **Comece por aqui se quer VER funcionando** |
 | [Receituário de exemplos](#receituário-exemplos-que-rodam) | **todo comando que dá para dar**, com o que volta de cada um |
 | [O percurso de uma tarefa](docs/TASK-LIFECYCLE.md) | **como as peças se encaixam** — do pedido ao arquivo gravado |
-| [Notificações com ntfy](docs/NOTIFICATIONS.md) | **fazer o agente te chamar** — passo a passo, do zero ao aviso no celular |
+| [Notificações](docs/NOTIFICATIONS.md) | **fazer o agente te chamar** — passo a passo do ntfy e do WebhookInbox, do zero ao aviso no celular |
 | [Arquitetura ponta a ponta](#arquitetura-ponta-a-ponta) | o modelo explicado, as 12 cláusulas com código e prova |
 | [Auditoria de fidelidade](#auditoria-de-fidelidade-à-documentação) | placar do que existe e do que falta |
 | [Avaliação do KasmVNC](#avaliação-do-kasmvnc) | medição, e por que não trocar agora |
@@ -329,8 +329,9 @@ task notify-setup     # grava /etc/agentd/notify.env e prova a entrega ponta a p
 task notify-test      # e um aviso NASCIDO de uma tarefa real, da fila ao destino
 ```
 
-📖 **Passo a passo completo — instalar o app, escolher o tópico, ligar, testar e
-diagnosticar — em [`NOTIFICATIONS.md`](docs/NOTIFICATIONS.md).**
+📖 **Passo a passo completo dos dois destinos — ntfy (app no celular, tópico) e
+WebhookInbox (criar a inbox, o `ttl` de 1 h, ler o JSON), mais como ligar, testar
+e diagnosticar — em [`NOTIFICATIONS.md`](docs/NOTIFICATIONS.md).**
 
 `AGENT_WEBHOOK` aceita **vários destinos**, cada um no seu formato — hoje são
 dois, servindo a leitores diferentes:
