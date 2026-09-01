@@ -82,6 +82,37 @@ except UnicodeDecodeError as e:
 done
 
 echo
+
+# 🛑 TAMANHO DO USER-DATA -- o gate que faltava, e que custou um droplet.
+#
+# O DigitalOcean recusa user-data acima de 64 KiB, e o cloud-init do NixOS embute
+# o `host.nix` inteiro. Em 31/08/2026 um bloco de comentario de 1.234 bytes levou
+# o total a 65.657 -- 121 acima do teto.
+#
+# O que torna isto grave nao e o estouro: e QUANDO ele aparece. O `10-update.sh`
+# ja havia parado os servicos, desmontado o volume e DESTRUIDO o droplet antigo
+# quando a API recusou a criacao do novo. A maquina ficou inexistente por causa de
+# um comentario, e nenhuma checagem local reprovava antes de chegar la.
+#
+# O aviso de folga curta e de proposito: quem o vir deve ENCURTAR COMENTARIO, nao
+# aumentar o teto -- o teto e do provedor.
+userDataLimit=65536
+echo "1c/4 tamanho do user-data (o provedor recusa acima de ${userDataLimit} bytes)"
+userDataBytes="$(bash scripts/29-nixos-cloudinit.sh 2>/dev/null | wc -c | tr -d ' ')"
+if [ "${userDataBytes:-0}" -eq 0 ]; then
+  fail "nao consegui gerar o cloud-init para medir"
+elif [ "$userDataBytes" -gt "$userDataLimit" ]; then
+  fail "user-data com ${userDataBytes} bytes, $((userDataBytes - userDataLimit)) acima do teto -- a criacao do droplet VAI ser recusada"
+else
+  headroom=$((userDataLimit - userDataBytes))
+  if [ "$headroom" -lt 1024 ]; then
+    ok "user-data com ${userDataBytes} bytes -- atencao: so ${headroom} de folga, encurtar comentario antes de acrescentar"
+  else
+    ok "user-data com ${userDataBytes} bytes (${headroom} de folga)"
+  fi
+fi
+
+echo
 echo "2/4 sintaxe dos auxiliares em shell"
 for f in nixos/scripts/*.sh; do
   bash -n "$f" 2>/dev/null && ok "$(basename "$f")" || fail "$(basename "$f"): erro de sintaxe"

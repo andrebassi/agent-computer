@@ -244,7 +244,10 @@ in
     # desligou o rebaixamento das ferramentas. Aqui o modelo nao alcanca o
     # arquivo, e o binario o le sozinho -- sem shell na unidade (achado 4).
     "d /etc/agent-probe 0755 root root -"
-    "f /etc/agent-probe/sink.url 0644 root root -"
+    # O argumento final e o CONTEUDO: `f ... -` cria o arquivo vazio e o coletor
+    # sobe sem destino -- captura, imprime no journal e nao envia. Engana porque
+    # `is-active` diz active e ha evento no journal; so o backend fica sem dado.
+    "f /etc/agent-probe/sink.url 0644 root root - http://127.0.0.1:9428/insert/jsonline?_stream_fields=source&_msg_field=_msg&_time_field=_time"
     # O efemero declarado, para a fronteira duravel x descartavel existir de fato.
     "d /scratch 1777 agent agent -"
 
@@ -751,26 +754,14 @@ PRECOS
     wantedBy = [ "multi-user.target" ];
     unitConfig.RequiresMountsFor = workspace;
 
-    # Telemetria: os dois endpoints sao BACKENDS DIFERENTES, e confundi-los
-    # produz um erro que parece de rede e nao e.
+    # Telemetria. 4317 = VictoriaTraces (gRPC, trechos); 8428 = VictoriaMetrics
+    # (HTTP, metricas). BACKENDS DIFERENTES: apontar os dois para 4317 devolve
+    # `Unimplemented: MetricsService/Export`, que parece erro de rede e nao e.
     #
-    #   4317  VictoriaTraces, gRPC  -> trechos
-    #   8428  VictoriaMetrics, HTTP -> metricas
-    #
-    # Apontar os dois para 4317 devolve `Unimplemented: MetricsService/Export`,
-    # porque o VictoriaTraces implementa so o servico de traces.
-    #
-    # Os enderecos sao de LOOPBACK e chegam ao Mac pelo tunel reverso, nao por
-    # rota da internet -- e por isso a maquina continua sem escutar em nada
-    # alem da 22, que e o invariante testado por `08-validate.sh`.
-    #
-    # ATENCAO: com o Mac fora do ar isto NAO derruba a tarefa -- o exportador e em lote
-    # e nunca bloqueia, e falha de envio vira aviso em stderr. Foi medido em
-    # `TestNewWithEndpointDoesNotBlockOnDial`.
-    #
-    # Declarado aqui porque ate 31/08/2026 nao estava em lugar nenhum: o codigo
-    # da telemetria existia, era testado, e a unidade subia sem as variaveis --
-    # o que faz o agentd rodar mudo e parecer que a instrumentacao nao funciona.
+    # Sao enderecos de LOOPBACK e chegam ao Mac pelo tunel reverso, entao a
+    # maquina segue sem escutar nada alem da 22 (invariante do 08-validate).
+    # Mac fora do ar nao derruba a tarefa: o exportador e em lote e nunca
+    # bloqueia (TestNewWithEndpointDoesNotBlockOnDial).
     environment = {
       AGENTD_OTLP_ENDPOINT = "127.0.0.1:4317";
       AGENTD_OTLP_METRICS_ENDPOINT = "127.0.0.1:8428";
