@@ -30,11 +30,67 @@ repoRoot="$(cd "$(dirname "$0")/.." && pwd)"
 NIX_CHANNEL="${NIX_CHANNEL:-nixos-25.11}"
 
 python3 - "$repoRoot" "$NIX_CHANNEL" <<'PYRENDER'
+import base64
+import gzip
 import pathlib
 import sys
+import textwrap
 
 repo = pathlib.Path(sys.argv[1])
 channel = sys.argv[2]
+
+# 🛑 O TETO DE 64 KiB DO PROVEDOR -- por que este arquivo comprime.
+#
+# O DigitalOcean recusa user-data acima de 65.536 bytes, e o `host.nix` sozinho
+# tem ~47 KB. Em 31/08/2026 um bloco de comentario de 1.234 bytes levou o total
+# a 65.657 e a criacao foi recusada -- DEPOIS de o `10-update.sh` ja ter
+# destruido o droplet antigo. A maquina ficou inexistente por causa de um
+# comentario.
+#
+# Encurtar o comentario devolveu 494 bytes de folga, o que so adia o problema:
+# com a margem nessa ordem, o proximo paragrafo repete o incidente.
+#
+# `encoding: gz+b64` e do proprio cloud-init: ele descomprime ao escrever o
+# arquivo. Duas propriedades que importam aqui:
+#
+#   1. base64 e ASCII PURO, entao o invariante que ja custou tres droplets
+#      (byte acima de 127 duplo-codificado -> cloud-init recusa em silencio)
+#      continua valendo -- e fica ate mais forte, porque nem os fontes precisam
+#      mais ser ASCII para o transporte funcionar.
+#   2. `mtime=0` no gzip torna a saida DETERMINISTICA. Sem isso o carimbo de
+#      tempo entra no cabecalho, o user-data muda a cada execucao, e o gate de
+#      tamanho mediria um numero diferente do que seria enviado.
+COMPRESSION_THRESHOLD = 2048
+
+
+def literalBlock(text, spaces):
+    """Indenta texto para um bloco literal de YAML."""
+    prefix = " " * spaces
+    out = []
+    for line in text.split("\n"):
+        out.append(prefix + line if line else "")
+    return "\n".join(out).rstrip("\n")
+
+
+def embedded(path, spaces):
+    """Devolve os campos YAML de um arquivo, comprimindo quando compensa.
+
+    Arquivo pequeno sai como texto legivel: gzip tem ~20 bytes de cabecalho e o
+    base64 infla 33%, entao comprimir um script de 800 bytes AUMENTA o
+    user-data. Alem disso, texto legivel no YAML e o que permite conferir o que
+    vai subir sem decodificar nada -- vantagem real que so vale a pena perder
+    quando o arquivo e grande.
+    """
+    raw = path.read_bytes()
+    if len(raw) < COMPRESSION_THRESHOLD:
+        return "    content: |\n" + literalBlock(raw.decode("ascii"), spaces)
+
+    packed = gzip.compress(raw, compresslevel=9, mtime=0)
+    encoded = base64.b64encode(packed).decode("ascii")
+    # Quebrado em 76 colunas por legibilidade; o decodificador de base64 do
+    # cloud-init ignora as quebras de linha.
+    wrapped = "\n".join(textwrap.wrap(encoded, 76))
+    return "    encoding: gz+b64\n    content: |\n" + literalBlock(wrapped, spaces)
 
 
 def indented(path, spaces):
@@ -57,19 +113,16 @@ helpers = ["screen-add", "screen-remove", "session-sync", "agent-status"]
 blocks = [
     f"""  - path: /etc/nixos/host.nix
     permissions: '0644'
-    content: |
-{indented(repo / 'nixos' / 'host.nix', 6)}""",
+{embedded(repo / 'nixos' / 'host.nix', 6)}""",
     f"""  - path: /etc/nixos/agent-authorized-keys
     permissions: '0644'
-    content: |
-{indented(repo / 'nixos' / 'agent-authorized-keys', 6)}""",
+{embedded(repo / 'nixos' / 'agent-authorized-keys', 6)}""",
 ]
 for name in helpers:
     blocks.append(
         f"""  - path: /etc/nixos/scripts/{name}.sh
     permissions: '0644'
-    content: |
-{indented(repo / 'nixos' / 'scripts' / f'{name}.sh', 6)}"""
+{embedded(repo / 'nixos' / 'scripts' / f'{name}.sh', 6)}"""
     )
 
 header = """#cloud-config

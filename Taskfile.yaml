@@ -315,6 +315,12 @@ tasks:
         load_token
         agent_ssh 'journalctl -u agentd-api.service -n 60 --no-pager'
 
+  cloudinit-test:
+    desc: Prova que o cloud-init DA NUVEM entende o user-data comprimido — cria um droplet próprio e o destrói
+    cmds:
+      - mkdir -p logs
+      - ./scripts/48-cloudinit-roundtrip-test.sh 2>&1 | tee logs/cloudinit-roundtrip.log
+
   network:
     desc: "Provisiona o transporte de AGENT_NETWORK (auto|tailscale|ssh|cloudflared) — a credencial nunca passa pelo cloud-init"
     cmds:
