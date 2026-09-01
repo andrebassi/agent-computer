@@ -1,8 +1,15 @@
 # agent-computer
 
+[![site](https://img.shields.io/badge/site-agent--computer.bassi.engineer-3fa7a5)](https://agent-computer.bassi.engineer)
+[![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)](LICENSE)
+[![cobertura](https://img.shields.io/badge/cobertura-90.9%25%20%C2%B7%20dom%C3%ADnio%20100%25-brightgreen)](docs/TEST-MAP.md)
+
 Desktop virtual persistente no DigitalOcean para agentes autônomos — reprodução
 em infraestrutura própria do modelo descrito em
 [docs.x.ai/grok-bot/computer-and-apps](https://docs.x.ai/grok-bot/computer-and-apps).
+
+**Página do projeto:** <https://agent-computer.bassi.engineer> · o conceito por
+trás dele, harness e loop, está em <https://bassi.engineer/agent-harness/>.
 
 O Grok Bot Computer é serviço hospedado da xAI: a doc não publica API, endpoint
 nem pacote, então não há o que instalar. O que existe aqui é a **mesma
