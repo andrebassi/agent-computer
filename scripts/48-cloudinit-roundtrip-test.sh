@@ -52,11 +52,11 @@ cleanup() {
       && echo "  ✅ destruido" || echo "  ⚠️  NAO destruido -- apagar na mao: doctl compute droplet delete $id --force"
   fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 echo "=== 1. gerando o user-data ==="
 userData="$(mktemp "${TMPDIR:-/tmp}/cloudinit-probe.XXXXXX.yaml")"
-trap 'rm -f "$userData"; cleanup' EXIT
+trap 'rm -f "$userData"; cleanup' EXIT INT TERM
 ./scripts/29-nixos-cloudinit.sh > "$userData" 2>/dev/null
 size="$(wc -c < "$userData" | tr -d ' ')"
 if [ "${size:-0}" -eq 0 ]; then
@@ -84,13 +84,20 @@ ok "IP $probeIP"
 
 echo
 echo "=== 3. esperando o cloud-init terminar ==="
-# O sinal depende do trabalho: so sai quando o cloud-init reporta conclusao.
-# Um `sleep` fixo passaria verde numa maquina que ainda nao escreveu nada.
+# Espera o ARQUIVO, nao o ciclo do cloud-init.
+#
+# `cloud-init status --wait` aguarda tudo, e o `runcmd` deste user-data dispara
+# o `nixos-infect` -- 10 a 20 minutos. `write_files` roda ANTES do runcmd, entao
+# esperar o ciclo inteiro e esperar por outra coisa: media a instalacao do NixOS
+# em vez do transporte do user-data, que e o que este teste existe para provar.
+#
+# `test -s` e nao `test -f`: arquivo criado e ainda vazio existe, e o teste
+# seguiria para o sha256 comparando contra nada.
 ready=0
 for _ in $(seq 1 30); do
   if timeout 15s ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=accept-new \
        -o ConnectTimeout=8 "root@${probeIP}" \
-       'cloud-init status --wait >/dev/null 2>&1; test -f /etc/nixos/host.nix' 2>/dev/null; then
+       'test -s /etc/nixos/host.nix' 2>/dev/null; then
     ready=1
     break
   fi
