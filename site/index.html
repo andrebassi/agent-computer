@@ -1,0 +1,728 @@
+<title>agent-computer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  /* ── Paleta ────────────────────────────────────────────────────────────────
+     O assunto é um painel de observação, então o tema escuro é o natural — mas
+     o claro recebe o mesmo cuidado, não uma inversão preguiçosa.
+
+     O accent é um teal DESSATURADO, de osciloscópio, não um neon. Âmbar e
+     tijolo são SEMÂNTICOS (take-over, bloqueio) e não contam como accent: no
+     produto eles significam estados distintos, e fundi-los com a cor de marca
+     apagaria a distinção que a tela precisa comunicar.                       */
+  :root {
+    --ground:      #F4F2ED;
+    --surface:     #FFFFFF;
+    --surface-alt: #EAE7E0;
+    --line:        #D5D0C6;
+    --ink:         #14191C;
+    --ink-soft:    #4A5257;
+    --ink-faint:   #7C858B;
+    --accent:      #16746F;
+    --accent-soft: #D7E9E7;
+    --amber:       #A8722A;
+    --brick:       #B0432C;
+    --shadow:      0 1px 2px rgba(20, 25, 28, .06), 0 8px 24px rgba(20, 25, 28, .05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0F1518;
+      --surface:     #151D21;
+      --surface-alt: #1B252A;
+      --line:        #2A363C;
+      --ink:         #E8EDEF;
+      --ink-soft:    #A3B0B6;
+      --ink-faint:   #6D7C84;
+      --accent:      #3FA7A5;
+      --accent-soft: #16302F;
+      --amber:       #D9A441;
+      --brick:       #C4553D;
+      --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #0F1518;
+    --surface:     #151D21;
+    --surface-alt: #1B252A;
+    --line:        #2A363C;
+    --ink:         #E8EDEF;
+    --ink-soft:    #A3B0B6;
+    --ink-faint:   #6D7C84;
+    --accent:      #3FA7A5;
+    --accent-soft: #16302F;
+    --amber:       #D9A441;
+    --brick:       #C4553D;
+    --shadow:      0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, sans-serif;
+    font-weight: 700;
+    text-wrap: balance;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  code, .mono, .num {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  a { color: var(--accent); }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .prose { max-width: 62ch; }
+
+  /* Rótulo de seção: caixa alta com respiro, como etiqueta de instrumento. */
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 10px;
+  }
+
+  /* ── Barra superior ─────────────────────────────────────────────────────── */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 24px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .brand-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .controls { display: flex; gap: 6px; }
+  .ctl {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .ctl:hover { color: var(--ink); border-color: var(--ink-faint); }
+  .ctl[aria-pressed="true"] {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  /* ── Abertura ───────────────────────────────────────────────────────────── */
+  .hero { padding: 76px 0 56px; }
+  .hero h1 {
+    font-size: clamp(40px, 7vw, 76px);
+    letter-spacing: -0.03em;
+    margin-bottom: 20px;
+  }
+  .hero h1 .qualifier { color: var(--accent); }
+  .lede {
+    font-size: clamp(17px, 2.1vw, 21px);
+    color: var(--ink-soft);
+    max-width: 58ch;
+    margin: 0 0 32px;
+  }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .cmd {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 11px 15px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    box-shadow: var(--shadow);
+  }
+  .cmd .sigil { color: var(--accent); font-weight: 600; }
+
+  /* ── Painel de estado: o objeto mais característico deste mundo ─────────── */
+  .panel {
+    margin-top: 48px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--line);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+  }
+  .lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .panel-body { padding: 4px 0; overflow-x: auto; }
+  .row {
+    display: grid;
+    grid-template-columns: 122px 1fr auto;
+    gap: 16px;
+    align-items: baseline;
+    padding: 9px 16px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    border-bottom: 1px solid var(--line);
+    min-width: 540px;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row .k { color: var(--ink-faint); }
+  .row .v { color: var(--ink); }
+  .chip {
+    font-size: 11px;
+    letter-spacing: .04em;
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .chip.ok   { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .chip.wait { color: var(--amber);  background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 32%, transparent); }
+  .chip.stop { color: var(--brick);  background: color-mix(in srgb, var(--brick) 12%, transparent); border-color: color-mix(in srgb, var(--brick) 32%, transparent); }
+
+  /* ── Seções ─────────────────────────────────────────────────────────────── */
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  section h2 { font-size: clamp(26px, 3.4vw, 38px); margin-bottom: 14px; }
+  .section-lede { color: var(--ink-soft); max-width: 62ch; margin: 0 0 36px; }
+
+  /* As três camadas SÃO três no produto — numerá-las carrega informação real. */
+  .layers { display: grid; gap: 14px; }
+  .layer {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 20px 22px;
+  }
+  .layer:nth-child(2) { border-left-color: var(--amber); }
+  .layer:nth-child(3) { border-left-color: var(--ink-faint); }
+  .layer-n {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--ink-faint);
+    line-height: 1;
+  }
+  .layer h3 { font-size: 20px; margin-bottom: 6px; }
+  .layer p { margin: 0 0 8px; color: var(--ink-soft); font-size: 15px; }
+  .layer .tech { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-faint); }
+  .layer .caveat {
+    font-size: 13px;
+    color: var(--ink-faint);
+    border-top: 1px dashed var(--line);
+    padding-top: 8px;
+    margin-top: 10px;
+  }
+
+  /* ── Grade de números medidos ───────────────────────────────────────────── */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .metric { background: var(--surface); padding: 18px 16px; }
+  .metric .n {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 27px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    display: block;
+    line-height: 1.15;
+  }
+  .metric .l { font-size: 13px; color: var(--ink-soft); display: block; margin-top: 3px; }
+
+  /* ── Motivos de take-over ───────────────────────────────────────────────── */
+  .reasons { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .reason {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 14px 16px;
+  }
+  .reason .code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--amber);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .reason.ours .code { color: var(--brick); }
+  .reason .txt { font-size: 14px; color: var(--ink-soft); }
+  .reason .origin {
+    font-size: 11px;
+    color: var(--ink-faint);
+    font-family: "IBM Plex Mono", monospace;
+    display: block;
+    margin-top: 7px;
+  }
+
+  /* ── Nota de destaque ───────────────────────────────────────────────────── */
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--brick);
+    border-radius: 4px;
+    padding: 20px 22px;
+    margin-top: 28px;
+  }
+  .note h3 { font-size: 17px; margin-bottom: 8px; color: var(--brick); }
+  .note p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+
+  /* ── Tabelas ────────────────────────────────────────────────────────────── */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; }
+  table { border-collapse: collapse; width: 100%; min-width: 520px; background: var(--surface); }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    background: var(--surface-alt);
+  }
+  tr:last-child td { border-bottom: 0; }
+  td.mono { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--accent); white-space: nowrap; }
+  td .default { color: var(--ink-faint); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
+
+  /* ── Passos ─────────────────────────────────────────────────────────────── */
+  .steps { display: grid; gap: 12px; counter-reset: step; }
+  .step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 16px;
+    align-items: start;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .step::before {
+    counter-increment: step;
+    content: counter(step);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 3px;
+    width: 24px; height: 24px;
+    display: grid;
+    place-items: center;
+  }
+  .step code { font-size: 13.5px; color: var(--ink); }
+  .step .what { display: block; font-size: 13.5px; color: var(--ink-soft); margin-top: 4px; }
+
+  footer {
+    padding: 44px 0 64px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-faint);
+    font-size: 13.5px;
+  }
+  footer p { max-width: 66ch; }
+
+  @media (max-width: 640px) {
+    .layer { grid-template-columns: 1fr; gap: 10px; }
+    .hero { padding: 48px 0 40px; }
+    section { padding: 48px 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="brand-dot"></span> agent-computer</div>
+    <div class="controls">
+      <button class="ctl" id="lang" type="button" aria-pressed="false">EN</button>
+      <button class="ctl" id="theme" type="button" title="tema">◐</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow" data-i="heroTag">Laboratório · infraestrutura própria</p>
+    <h1><span data-i="h1a">Um computador que</span> <span class="qualifier" data-i="h1b">se observa por dentro</span></h1>
+    <p class="lede" data-i="lede">Desktop virtual persistente onde agentes autônomos trabalham sozinhos — e param sozinhos ao esbarrar numa senha, num CAPTCHA ou num pedido que não conseguiram cumprir. O que o modelo faz é visto pelo kernel, fora do alcance dele.</p>
+    <div class="cta-row">
+      <span class="cmd"><span class="sigil">$</span> task up</span>
+      <span class="cmd"><span class="sigil">$</span> task open</span>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <span class="lamp"></span>
+        <span data-i="panelHead">estado da máquina — medido em 01/09/2026</span>
+      </div>
+      <div class="panel-body">
+        <div class="row"><span class="k">sistema</span><span class="v mono">NixOS 25.11 · kernel 6.12.93</span><span class="chip ok" data-i="chipDeclarative">declarativo</span></div>
+        <div class="row"><span class="k">volume</span><span class="v mono">/workspace · 20 GB · 282 <span data-i="conversations">conversas</span></span><span class="chip ok" data-i="chipDurable">durável</span></div>
+        <div class="row"><span class="k">droplet</span><span class="v mono">s-2vcpu-4gb</span><span class="chip wait" data-i="chipRebuilt">reconstruível</span></div>
+        <div class="row"><span class="k">firewall</span><span class="v mono">22/tcp · <span data-i="restLoopback">o resto em 127.0.0.1</span></span><span class="chip ok" data-i="chipInvariant">invariante</span></div>
+        <div class="row"><span class="k">agent-probe</span><span class="v mono">eBPF · execve + connect</span><span class="chip ok" data-i="chipOnBoot">sobe no boot</span></div>
+        <div class="row"><span class="k">tela 5</span><span class="v mono" data-i="screen5">parou sem cumprir o pedido</span><span class="chip stop" data-i="chipNeedsYou">precisa de você</span></div>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <p class="eyebrow" data-i="problemTag">O problema</p>
+    <h2 data-i="problemH">Um agente autônomo trabalha onde ninguém está olhando</h2>
+    <p class="section-lede" data-i="problemP">Ele abre navegador, roda comando, chama API. Quando termina, você lê uma frase dizendo que terminou. Em 4h13 de uso real houve <strong>170 falhas de ferramenta</strong> em 326 iterações, e <strong>31 de 123 tarefas</strong> terminaram bloqueadas — sem ninguém saber por quê.</p>
+    <div class="metrics">
+      <div class="metric"><span class="n">326</span><span class="l" data-i="m1">iterações em 4h13</span></div>
+      <div class="metric"><span class="n">170</span><span class="l" data-i="m2">falhas de ferramenta</span></div>
+      <div class="metric"><span class="n">31/123</span><span class="l" data-i="m3">tarefas bloqueadas</span></div>
+      <div class="metric"><span class="n">0</span><span class="l" data-i="m4">telemetria, antes disto</span></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="layersTag">Observação</p>
+    <h2 data-i="layersH">Três camadas, porque uma não responde a pergunta inteira</h2>
+    <p class="section-lede" data-i="layersP">A primeira sabe a intenção e é cega ao que o sistema fez. A segunda sabe o fato e é cega à intenção. Só juntas respondem “o modelo tentou X e a máquina fez Y”.</p>
+    <div class="layers">
+      <div class="layer">
+        <span class="layer-n">1</span>
+        <div>
+          <h3 data-i="l1h">O que o agente quis</h3>
+          <p data-i="l1p">Trechos OpenTelemetry no laço da tarefa, com as convenções GenAI: cada iteração, cada chamada ao modelo, cada ferramenta cronometrada.</p>
+          <p class="tech">agentd.task › agentd.iteration › chat · execute_tool</p>
+          <p class="caveat" data-i="l1c">Nenhum conteúdo de prompt, resposta ou comando sai da máquina — nem redigido. No lugar dos argumentos vai um hash.</p>
+        </div>
+      </div>
+      <div class="layer">
+        <span class="layer-n">2</span>
+        <div>
+          <h3 data-i="l2h">O que o kernel viu</h3>
+          <p data-i="l2p">Coletor eBPF próprio, escrito em Go. Todo <code>execve</code> com o caminho completo, toda conexão de saída marcada quando o destino é rede privada.</p>
+          <p class="tech">sched_process_exec · inet_sock_set_state</p>
+          <p class="caveat" data-i="l2c">É a única camada que o modelo não desliga por dentro — e mesmo ela cai para quem tem sudo, então a prova de que está viva mora fora da máquina.</p>
+        </div>
+      </div>
+      <div class="layer">
+        <span class="layer-n">3</span>
+        <div>
+          <h3 data-i="l3h">Por que a máquina degradou</h3>
+          <p data-i="l3p">Pressão de CPU, memória e disco lidas do próprio kernel, mais a fração de memória realmente disponível.</p>
+          <p class="tech">/proc/pressure · MemAvailable</p>
+          <p class="caveat" data-i="l3c">Não é eBPF, e dizer isso é parte do desenho: o kernel já calcula a pressão, e uma sonda que a recalculasse custaria mais e mediria pior.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="takeoverTag">Take-over</p>
+    <h2 data-i="takeoverH">Sete motivos para o agente parar e chamar você</h2>
+    <p class="section-lede" data-i="takeoverP">Cinco descrevem o que o <em>site</em> exige. Dois são nossos — e apontam para lados opostos.</p>
+    <div class="reasons">
+      <div class="reason"><span class="code">password</span><span class="txt" data-i="r1">Senha ou passkey</span><span class="origin" data-i="site1">exigido pelo site</span></div>
+      <div class="reason"><span class="code">two_factor</span><span class="txt" data-i="r2">Código de verificação em duas etapas</span><span class="origin" data-i="site2">exigido pelo site</span></div>
+      <div class="reason"><span class="code">captcha</span><span class="txt" data-i="r3">CAPTCHA — nunca contornado</span><span class="origin" data-i="site3">exigido pelo site</span></div>
+      <div class="reason"><span class="code">payment_identity</span><span class="txt" data-i="r4">Confirmação de pagamento ou identidade</span><span class="origin" data-i="site4">exigido pelo site</span></div>
+      <div class="reason"><span class="code">human_required</span><span class="txt" data-i="r5">O site exige uma pessoa</span><span class="origin" data-i="site5">exigido pelo site</span></div>
+      <div class="reason ours"><span class="code">guardrail</span><span class="txt" data-i="r6">Foi longe demais: laço, custo, turnos, tempo</span><span class="origin" data-i="ours1">nosso — contenção</span></div>
+      <div class="reason ours"><span class="code">unverified</span><span class="txt" data-i="r7">Parou cedo demais: entregou sem cumprir</span><span class="origin" data-i="ours2">nosso — verificação</span></div>
+    </div>
+    <div class="note">
+      <h3 data-i="noteH">Parar não é cumprir</h3>
+      <p data-i="noteP">O laço concluía a tarefa quando o modelo parava de chamar ferramentas. Isso mede que ele parou, não que fez o que foi pedido — e a diferença é onde mora o defeito silencioso: a tarefa fica “concluída”, ninguém olha, e o pedido não aconteceu. A verificação pergunta, exigindo evidência citada do histórico, e devolve a lacuna ao modelo antes de chamar uma pessoa.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="guardTag">Contenção</p>
+    <h2 data-i="guardH">Tetos que se ajustam sem recompilar</h2>
+    <p class="section-lede" data-i="guardP">Teto que só muda recompilando é teto desligado — e o teste de contenção precisa forçá-lo, porque pedir ao modelo que falhe produz um teste que passa e reprova alternadamente.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th data-i="thVar">Variável</th>
+            <th data-i="thDefault">Padrão</th>
+            <th data-i="thWhat">O que detém</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">AGENTD_MAX_TURNS</td><td><span class="default">180</span></td><td data-i="g1">Turnos acumulados, atravessando retomadas</td></tr>
+          <tr><td class="mono">AGENTD_MAX_TOOL_FAILURES</td><td><span class="default">3</span></td><td data-i="g2">Falhas idênticas seguidas — é o detector de laço</td></tr>
+          <tr><td class="mono">AGENTD_MAX_COST_USD</td><td><span class="default">3.00</span></td><td data-i="g3">Inferência por tarefa, em dólar</td></tr>
+          <tr><td class="mono">AGENTD_MAX_VERIFY_ATTEMPTS</td><td><span class="default">2</span></td><td data-i="g4">Devoluções da lacuna antes de chamar uma pessoa</td></tr>
+          <tr><td class="mono">AGENTD_MAX_CONCURRENT_TASKS</td><td><span class="default">—</span></td><td data-i="g5">Tarefas simultâneas na máquina inteira</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="secTag">Privilégio</p>
+    <h2 data-i="secH">O adversário declarado é o próprio modelo</h2>
+    <p class="section-lede" data-i="secP">A máquina não publica nada: só a porta 22 no firewall, com tela, navegador e API em loopback. A pergunta de segurança não é quem entra de fora — é o que o modelo alcança a partir da ferramenta de shell, que é a função do produto e não um defeito.</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th data-i="thWho">Usuário</th>
+            <th data-i="thIs">Quem é</th>
+            <th data-i="thReach">Alcança</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">agentd</td><td data-i="u1a">o serviço</td><td data-i="u1b">o cofre cifrado, /etc/agentd</td></tr>
+          <tr><td class="mono">agent</td><td data-i="u2a">as ferramentas do modelo</td><td data-i="u2b">/workspace, sudo por lista fechada</td></tr>
+          <tr><td class="mono">root</td><td data-i="u3a">o operador, por chave que só existe no seu laptop</td><td data-i="u3b">tudo</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <h3 data-i="sec2H">A credencial nunca passa pelo cloud-init</h3>
+      <p data-i="sec2P">O user-data é servido pelo metadata da nuvem, que a ferramenta de shell alcança — logo, o modelo também. Uma chave da malha ali seria legível justamente por quem ela deveria excluir, e com ela o modelo entraria na sua rede pessoal. Ela viaja por SSH de root, pela entrada do processo — nunca como argumento, que <code>ps</code> revela — e é apagada assim que consumida.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="startTag">Começar</p>
+    <h2 data-i="startH">Do zero à máquina observada</h2>
+    <div class="steps">
+      <div class="step"><div><code>task check</code><span class="what" data-i="s1">Confere binários, token, chave e latência — antes de gastar</span></div></div>
+      <div class="step"><div><code>AGENT_OS=nixos task up</code><span class="what" data-i="s2">Volume durável e droplet, sistema declarativo, validação ponta a ponta</span></div></div>
+      <div class="step"><div><code>task deploy &amp;&amp; task vault</code><span class="what" data-i="s3">Instala o agente por SSH de root e provisiona o cofre cifrado</span></div></div>
+      <div class="step"><div><code>task obs:up</code><span class="what" data-i="s4">Sobe o backend de observação no seu laptop, com Nix</span></div></div>
+      <div class="step"><div><code>task probe:deploy</code><span class="what" data-i="s5">Compila os objetos BPF e instala o coletor de kernel</span></div></div>
+      <div class="step"><div><code>task open</code><span class="what" data-i="s6">Abre a tela ao vivo por túnel — nada fica exposto</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow" data-i="stateTag">Estado do projeto</p>
+    <h2 data-i="stateH">Números medidos, não estimados</h2>
+    <div class="metrics">
+      <div class="metric"><span class="n">136</span><span class="l" data-i="n1">arquivos Go, 65 de teste</span></div>
+      <div class="metric"><span class="n">608</span><span class="l" data-i="n2">funções de teste</span></div>
+      <div class="metric"><span class="n">90,9%</span><span class="l" data-i="n3">cobertura · domínio 100%</span></div>
+      <div class="metric"><span class="n">60</span><span class="l" data-i="n4">tarefas no Taskfile</span></div>
+      <div class="metric"><span class="n">49</span><span class="l" data-i="n5">scripts numerados</span></div>
+      <div class="metric"><span class="n">3.130</span><span class="l" data-i="n6">linhas em 10 documentos</span></div>
+      <div class="metric"><span class="n">US$ 27</span><span class="l" data-i="n7">por mês, máquina e volume</span></div>
+      <div class="metric"><span class="n">2</span><span class="l" data-i="n8">módulos Go separados</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <p data-i="foot1"><strong>agent-computer</strong> é um laboratório que reproduz, em infraestrutura própria, a arquitetura do Grok Bot Computer: um desktop persistente onde agentes trabalham, com take-over humano quando esbarram em senha, 2FA ou CAPTCHA.</p>
+    <p data-i="foot2">Documentação em português, identificadores em inglês. Cada número desta página foi medido na máquina, não estimado — é regra do repositório, e é por isso que ela não diz “rápido”, “escalável” ou “seguro” em lugar nenhum.</p>
+  </footer>
+
+</div>
+
+<script>
+  // ── Tradução ────────────────────────────────────────────────────────────────
+  // O português é o padrão declarado, então ele vive no HTML e o dicionário
+  // guarda só o inglês. Assim a página servida sem JavaScript já está no idioma
+  // certo, e não há duas cópias do texto para divergirem.
+  const EN = {
+    heroTag: "Lab · self-hosted infrastructure",
+    h1a: "A computer that", h1b: "watches itself from inside",
+    lede: "A persistent virtual desktop where autonomous agents work on their own — and stop on their own when they hit a password, a CAPTCHA, or a request they could not fulfil. What the model does is seen by the kernel, out of its reach.",
+    panelHead: "machine state — measured 2026-09-01",
+    chipDeclarative: "declarative", chipDurable: "durable", chipRebuilt: "rebuildable",
+    chipInvariant: "invariant", chipOnBoot: "starts at boot", chipNeedsYou: "needs you",
+    conversations: "conversations",
+    restLoopback: "everything else on 127.0.0.1",
+    screen5: "stopped without fulfilling the request",
+
+    problemTag: "The problem",
+    problemH: "An autonomous agent works where nobody is watching",
+    problemP: "It opens a browser, runs commands, calls APIs. When it finishes, you read one sentence saying it finished. Across 4h13 of real use there were <strong>170 tool failures</strong> in 326 iterations, and <strong>31 of 123 tasks</strong> ended blocked — with nobody knowing why.",
+    m1: "iterations in 4h13", m2: "tool failures", m3: "tasks blocked", m4: "telemetry, before this",
+
+    layersTag: "Observation",
+    layersH: "Three layers, because one does not answer the whole question",
+    layersP: "The first knows the intent and is blind to what the system did. The second knows the fact and is blind to the intent. Only together do they answer “the model tried X and the machine did Y”.",
+    l1h: "What the agent intended",
+    l1p: "OpenTelemetry spans around the task loop, following the GenAI conventions: every iteration, every model call, every tool timed.",
+    l1c: "No prompt, response or command content leaves the machine — not even redacted. A hash goes in place of the arguments.",
+    l2h: "What the kernel saw",
+    l2p: "A purpose-built eBPF collector, written in Go. Every <code>execve</code> with its full path, every outbound connection flagged when the destination is a private network.",
+    l2c: "It is the only layer the model cannot switch off from inside — and even it falls to anyone with sudo, so the proof that it is alive lives off the machine.",
+    l3h: "Why the machine degraded",
+    l3p: "CPU, memory and disk pressure read from the kernel itself, plus the fraction of memory actually available.",
+    l3c: "This is not eBPF, and saying so is part of the design: the kernel already computes pressure, and a probe recomputing it would cost more and measure worse.",
+
+    takeoverTag: "Take-over",
+    takeoverH: "Seven reasons for the agent to stop and call you",
+    takeoverP: "Five describe what the <em>site</em> demands. Two are ours — and they point in opposite directions.",
+    r1: "Password or passkey", r2: "Two-factor verification code",
+    r3: "CAPTCHA — never circumvented", r4: "Payment or identity confirmation",
+    r5: "The site requires a person",
+    r6: "Went too far: loop, cost, turns, wall clock",
+    r7: "Stopped too early: delivered without fulfilling",
+    site1: "required by the site", site2: "required by the site", site3: "required by the site",
+    site4: "required by the site", site5: "required by the site",
+    ours1: "ours — containment", ours2: "ours — verification",
+    noteH: "Stopping is not fulfilling",
+    noteP: "The loop finished a task when the model stopped calling tools. That measures that it stopped, not that it did what was asked — and the gap is where the silent defect lives: the task reads “done”, nobody looks, and the request never happened. Verification asks, demanding evidence quoted from the history, and hands the gap back to the model before calling a person.",
+
+    guardTag: "Containment",
+    guardH: "Ceilings you can change without recompiling",
+    guardP: "A ceiling that only changes by recompiling is a ceiling switched off — and the containment test has to force it, because asking the model to fail produces a test that passes and fails at random.",
+    thVar: "Variable", thDefault: "Default", thWhat: "What it stops",
+    g1: "Accumulated turns, carried across resumes",
+    g2: "Identical failures in a row — this is the loop detector",
+    g3: "Inference per task, in dollars",
+    g4: "Times the gap goes back to the model before calling a person",
+    g5: "Concurrent tasks across the whole machine",
+
+    secTag: "Privilege",
+    secH: "The declared adversary is the model itself",
+    secP: "The machine publishes nothing: only port 22 in the firewall, with screen, browser and API on loopback. The security question is not who gets in from outside — it is what the model reaches through the shell tool, which is the product’s function, not a flaw.",
+    thWho: "User", thIs: "Who it is", thReach: "Reaches",
+    u1a: "the service", u1b: "the encrypted vault, /etc/agentd",
+    u2a: "the model’s tools", u2b: "/workspace, sudo by closed list",
+    u3a: "the operator, via a key that exists only on your laptop", u3b: "everything",
+    sec2H: "The credential never travels through cloud-init",
+    sec2P: "User-data is served by the cloud metadata endpoint, which the shell tool can reach — so the model can too. A mesh key there would be readable by exactly who it should exclude, and with it the model would join your personal network. It travels over root SSH, through the process’s stdin — never as an argument, which <code>ps</code> reveals — and is shredded once consumed.",
+
+    startTag: "Getting started", startH: "From zero to an observed machine",
+    s1: "Checks binaries, token, key and latency — before spending anything",
+    s2: "Durable volume and droplet, declarative system, end-to-end validation",
+    s3: "Installs the agent over root SSH and provisions the encrypted vault",
+    s4: "Brings up the observation backend on your laptop, with Nix",
+    s5: "Compiles the BPF objects and installs the kernel collector",
+    s6: "Opens the live screen through a tunnel — nothing is exposed",
+
+    stateTag: "Project state", stateH: "Measured numbers, not estimates",
+    n1: "Go files, 65 of them tests", n2: "test functions",
+    n3: "coverage · domain at 100%", n4: "tasks in the Taskfile",
+    n5: "numbered scripts", n6: "lines across 10 documents",
+    n7: "per month, machine and volume", n8: "separate Go modules",
+
+    foot1: "<strong>agent-computer</strong> is a lab that reproduces, on self-hosted infrastructure, the architecture of the Grok Bot Computer: a persistent desktop where agents work, with human take-over when they hit a password, 2FA or a CAPTCHA.",
+    foot2: "Documentation in Portuguese, identifiers in English. Every number on this page was measured on the machine, not estimated — it is a rule of the repository, and it is why the page never says “fast”, “scalable” or “secure”."
+  };
+
+  const nodes = document.querySelectorAll("[data-i]");
+
+  // O português original é capturado no primeiro carregamento: sem isto, voltar
+  // de EN para PT exigiria um segundo dicionário, e os dois divergiriam na
+  // primeira edição de texto.
+  const original = new Map();
+  nodes.forEach(node => original.set(node, node.innerHTML));
+
+  const langButton = document.getElementById("lang");
+
+  // applyLanguage troca o texto e o rótulo do botão, e marca o idioma no
+  // documento para leitor de tela e hifenização.
+  function applyLanguage(lang) {
+    const english = lang === "en";
+    nodes.forEach(node => {
+      const key = node.dataset.i;
+      node.innerHTML = english && EN[key] ? EN[key] : original.get(node);
+    });
+    document.documentElement.lang = english ? "en" : "pt-BR";
+    langButton.textContent = english ? "PT" : "EN";
+    langButton.setAttribute("aria-pressed", String(english));
+    langButton.setAttribute("aria-label", english ? "Switch to Portuguese" : "Mudar para inglês");
+    try { localStorage.setItem("ac-lang", lang); } catch (error) { /* janela privada */ }
+  }
+
+  langButton.addEventListener("click", () => {
+    applyLanguage(langButton.getAttribute("aria-pressed") === "true" ? "pt" : "en");
+  });
+
+  // Preferência guardada, quando o navegador permite. Leitor em janela privada
+  // ou com dados de site bloqueados cai no padrão, que é o português.
+  try {
+    const saved = localStorage.getItem("ac-lang");
+    if (saved) {
+      applyLanguage(saved);
+    } else if ((navigator.language || "").toLowerCase().startsWith("en")) {
+      applyLanguage("en");
+    }
+  } catch (error) { /* segue em pt-BR */ }
+
+  // ── Tema ────────────────────────────────────────────────────────────────────
+  const themeButton = document.getElementById("theme");
+  themeButton.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme");
+    const systemPrefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    // Sem escolha anterior, o primeiro clique vai para o OPOSTO do sistema —
+    // que é o que alguém espera ao apertar um botão de tema.
+    const next = current
+      ? (current === "dark" ? "light" : "dark")
+      : (systemPrefersDark ? "light" : "dark");
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("ac-theme", next); } catch (error) { /* janela privada */ }
+  });
+
+  try {
+    const savedTheme = localStorage.getItem("ac-theme");
+    if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
+  } catch (error) { /* segue a preferência do sistema */ }
+</script>
