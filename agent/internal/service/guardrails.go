@@ -119,6 +119,14 @@ const (
 	GuardrailWallClock GuardrailKind = "tempo-de-parede"
 	GuardrailTruncated GuardrailKind = "resposta-truncada"
 	GuardrailCostCap   GuardrailKind = "teto-de-custo"
+
+	// Aponta para o lado oposto dos cinco acima. Eles param um agente que está
+	// indo longe demais — turnos, laço, tempo, custo. Este marca quem parou cedo
+	// demais: entregou sem cumprir, e devolver a lacuna não resolveu.
+	//
+	// Quem lê a tela precisa da diferença: nos outros a pergunta é se vale
+	// continuar; neste, é o que ficou faltando.
+	GuardrailUnverified GuardrailKind = "parou-sem-cumprir"
 )
 
 // GuardrailHit é o veredito de um detector.

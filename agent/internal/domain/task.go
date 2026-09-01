@@ -62,6 +62,19 @@ const (
 	// Quem o emite é sempre um detector determinístico, nunca o modelo: ele não
 	// tem ferramenta que produza este motivo.
 	BlockGuardrail BlockReason = "guardrail"
+
+	// BlockUnverified é o sétimo motivo: o agente PAROU, mas o que foi pedido
+	// não foi cumprido, e devolver a lacuna a ele não resolveu.
+	//
+	// Separado de `guardrail` de propósito, embora os dois sejam nossos. Um
+	// guardrail diz "estava indo longe demais" — laço, custo, turnos; este diz
+	// "terminou cedo demais". São o oposto um do outro, e quem olha a tela
+	// precisa da diferença: no primeiro caso a pergunta é se vale continuar, no
+	// segundo é o que ficou faltando.
+	//
+	// Também nunca vem do modelo: é o verificador quem o emite, depois de
+	// esgotar as devoluções.
+	BlockUnverified BlockReason = "unverified"
 )
 
 // ValidBlockReason diz se o motivo está entre os previstos. Quem escolhe o
@@ -69,7 +82,8 @@ const (
 // desconhecido bloquearia a tarefa sem que a tela soubesse o que pedir.
 func ValidBlockReason(r BlockReason) bool {
 	switch r {
-	case BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired, BlockGuardrail:
+	case BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity, BlockHumanRequired,
+		BlockGuardrail, BlockUnverified:
 		return true
 	}
 	return false

@@ -90,11 +90,11 @@ const (
 	metricTasksRunning = "agentd.tasks.running"
 
 	// Rótulos. Todos de conjunto fechado — ver a regra de cardinalidade acima.
-	attrModel     = "agentd.model"
-	attrTokenType = "agentd.token.type"
+	attrModel      = "agentd.model"
+	attrTokenType  = "agentd.token.type"
 	attrStopReason = "agentd.stop_reason"
-	attrToolName  = "agentd.tool.name"
-	attrTaskState = "agentd.task.state"
+	attrToolName   = "agentd.tool.name"
+	attrTaskState  = "agentd.task.state"
 
 	// Valores do rótulo de tipo de token.
 	tokenTypeInput  = "input"

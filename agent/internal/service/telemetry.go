@@ -177,6 +177,21 @@ const (
 
 	// attrBlockReason é o motivo do bloqueio. Conjunto fechado de seis.
 	attrBlockReason = "agentd.block.reason"
+
+	// eventVerifyMiss é o instante em que a verificação recusou a conclusão e a
+	// lacuna voltou para o modelo.
+	//
+	// É EVENTO e não trecho próprio, pelo mesmo motivo do guardrail: um trecho
+	// aberto por verificação fecharia junto com a iteração seguinte e mediria o
+	// trabalho de recuperação, não a verificação.
+	eventVerifyMiss = "agentd.verify.miss"
+
+	// attrVerifyAttempt é a qual devolução este evento pertence.
+	//
+	// Número pequeno e limitado pelo teto, então é rótulo seguro. O que NÃO vai
+	// junto é o texto do que faltou: ele descreve conteúdo da tarefa, e
+	// telemetria sai da máquina enquanto o `progress.md` fica no volume.
+	attrVerifyAttempt = "agentd.verify.attempt"
 )
 
 // Attribute é um par nome/valor pendurado num trecho.

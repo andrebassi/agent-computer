@@ -64,6 +64,7 @@ o que o teto existe para evitar. Todos terminam em `blocked` + take-over.
 | turnos acumulados por tarefa | 180 | `AGENTD_MAX_TURNS` |
 | mesma ferramenta falhando com os mesmos argumentos | 3 | `AGENTD_MAX_TOOL_FAILURES` |
 | **custo acumulado da tarefa** | **US$ 3,00** | `AGENTD_MAX_COST_USD` |
+| `AGENTD_MAX_VERIFY_ATTEMPTS` | 2 | quantas vezes a lacuna volta ao modelo antes de virar bloqueio; 0 bloqueia na primeira recusa |
 | fração do tempo da tarefa | 80% de 2 h | — |
 
 Mais um caso que não é limiar: **resposta truncada**. Um `finish_reason:

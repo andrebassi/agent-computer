@@ -233,6 +233,11 @@ Camada nova, documentada em [`GUARDRAILS.md`](GUARDRAILS.md). O que ela fechou:
 | observabilidade do laço | `service.Agent` não tinha logger nenhum |
 | trecho da tarefa, do modelo e da ferramenta | `TestLoopOpensExpectedSpans` — remove-se um dos três pontos de instrumentação e ele reprova nomeando qual |
 | take-over vira evento na telemetria | `TestTakeoverEmitsEvent` |
+| parar não é cumprir: veredicto positivo termina | `TestLoopFinishesWhenVerdictIsMet` |
+| lacuna volta ao modelo e ele corrige | `TestLoopReturnsTheGapAndThenFinishes` — remove-se a devolução e a tarefa bloqueia |
+| esgotadas as devoluções, bloqueia para uma pessoa | `TestLoopBlocksWhenVerificationIsExhausted` — com `AGENTD_MAX_VERIFY_ATTEMPTS=0`, determinístico |
+| verificação indisponível NÃO reprova | `TestLoopIgnoresVerifierFailure` |
+| quem não liga a verificação não paga nada | `TestLoopWithoutVerifierKeepsOldBehavior` — pega o turno extra que uma regressão introduziria |
 | `trace_id` no `activity.log` | `TestJournalCarriesTraceID`, e `TestJournalWithoutTracerStaysUnchanged` para o formato antigo sem telemetria |
 | telemetria não derruba a tarefa | `TestNewWithEndpointDoesNotBlockOnDial` — backend fora do ar não pode impedir o agente de subir |
 | nada de conteúdo vaza para trecho | varredura no fechamento, não teste unitário: nenhum atributo carrega `Content`, `Prompt`, `Output`, `Detail`, `Command` ou `Arguments` |

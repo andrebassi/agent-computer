@@ -67,6 +67,10 @@ type Agent struct {
 	// meter registra as medidas agregáveis. Nunca é nil — o padrão descarta,
 	// pelo mesmo motivo do tracer.
 	meter Meter
+	// verifier julga se a tarefa que parou realmente cumpriu o pedido. Nunca é
+	// nil — o padrão aprova tudo, o que preserva o comportamento anterior à
+	// verificação existir.
+	verifier CompletionVerifier
 	// trackedSecrets são os valores a apagar do histórico se reaparecerem.
 	//
 	// Ficam SÓ em memória: o campo correspondente na conversa é não-exportado,
@@ -194,11 +198,12 @@ func NewAgent(
 		// Descartar por padrão, e não nil: sem destino configurado o agente
 		// funciona igual, e não há um caminho onde esquecer a checagem de nil
 		// vire pânico em produção.
-		sink:    discardSink{},
-		journal: discardJournal{},
-		cost:    noCost{},
-		tracer:  discardTracer{},
-		meter:   discardMeter{},
+		sink:     discardSink{},
+		journal:  discardJournal{},
+		cost:     noCost{},
+		tracer:   discardTracer{},
+		meter:    discardMeter{},
+		verifier: discardVerifier{},
 	}
 	for _, opt := range opts {
 		opt(agent)
@@ -284,6 +289,11 @@ func (a *Agent) Run(ctx context.Context, task *domain.Task) error {
 func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Conversation) error {
 	specs := a.toolSpecs()
 	guard := newGuardrailState(a.clock(), a.taskBudget)
+
+	// Fora do laço de propósito: dentro, reiniciaria a cada iteração e o teto de
+	// devoluções nunca seria alcançado — o agente ficaria repetindo a mesma
+	// lacuna até estourar os turnos, que é o modo de falha mais caro.
+	verifyMisses := 0
 
 	for i := 0; i < maxIterations; i++ {
 		// Detectores ANTES de chamar o modelo: parar depois de gastar o turno
@@ -373,6 +383,49 @@ func (a *Agent) iterate(ctx context.Context, task *domain.Task, conv *domain.Con
 				}
 				return a.settle(ctx, task, conv)
 			}
+			// PARAR não é CUMPRIR — e a diferença é onde mora o defeito mudo.
+			//
+			// O ramo acima já tratava um caso particular disto (resposta cortada
+			// por limite de saída chega sem chamada de ferramenta e parecia
+			// conclusão). A verificação generaliza: pergunta se o que foi pedido
+			// aconteceu, e devolve a lacuna ao modelo quando não aconteceu.
+			//
+			// Com o verificador mudo — o default — este bloco se comporta
+			// exatamente como antes: aprova e termina.
+			verdict, verifyErr := a.verifier.Verify(ctx, task.Prompt, conv.Messages)
+			switch {
+			case verifyErr != nil:
+				// Verificação indisponível é ABSTENÇÃO, nunca reprovação. Tratar
+				// erro como "não cumpriu" faria uma falha de rede transformar
+				// toda tarefa boa em bloqueio — o oposto do que se quer, e do
+				// tipo que só aparece quando o backend já está fora do ar.
+				_ = a.journal.RecordError(ctx, fmt.Sprintf(
+					"verificacao indisponivel tarefa=%s%s %v",
+					task.ID, a.traceSuffix(ctx), verifyErr))
+
+			case !verdict.Met && verifyMisses < verifyAttempts():
+				// Devolve a lacuna e SEGUE no laço. Não é falha de ferramenta
+				// nem guardrail: é trabalho que falta, e o modelo costuma
+				// completá-lo sozinho ao ser lembrado — por isso a devolução
+				// vem antes do bloqueio.
+				verifyMisses++
+				conv.AddAssistant(completion.Content, nil)
+				conv.AddUser(verifyLesson(verdict, verifyMisses, verifyAttempts()))
+				_ = a.journal.RecordProgress(ctx, fmt.Sprintf(
+					"verificacao %d/%d: falta %s", verifyMisses, verifyAttempts(), verdict.Missing))
+				a.tracer.AddEvent(ctx, eventVerifyMiss,
+					Int(attrVerifyAttempt, verifyMisses))
+				continue
+
+			case !verdict.Met:
+				// Esgotadas as devoluções, quem decide é uma pessoa: o agente
+				// não fecha sozinho, e insistir só gastaria turno repetindo.
+				if err := a.applyUnverified(ctx, task, conv, verdict); err != nil {
+					return err
+				}
+				return a.settle(ctx, task, conv)
+			}
+
 			if err := task.Finish(a.clock()); err != nil {
 				return err
 			}
