@@ -105,6 +105,12 @@ func (r BlockReason) Description() string {
 		return "o site exige uma pessoa"
 	case BlockGuardrail:
 		return "um limite de segurança foi atingido"
+	case BlockUnverified:
+		// Deliberadamente diferente do guardrail: ali a pergunta é se vale
+		// continuar; aqui é o que ficou faltando. O detalhe do bloqueio traz a
+		// lacuna, então a descrição só precisa dizer de que tipo de parada se
+		// trata.
+		return "o agente parou sem cumprir o pedido"
 	}
 	return "motivo desconhecido"
 }

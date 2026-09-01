@@ -28,6 +28,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/telemetry"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/verifier"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
 	"github.com/andrebassi/agent-computer/agent/internal/ports"
@@ -413,6 +414,23 @@ func run(o runOptions) error {
 	}
 	if cliMeter != nil {
 		agentOptions = append(agentOptions, service.WithMeter(cliMeter))
+	}
+
+	// Verificação de conclusão, ligada por AGENTD_VERIFY_COMPLETION=1.
+	//
+	// 🛑 Precisa estar AQUI E em `deps.go`. Esta montagem e a da fábrica são
+	// caminhos separados — a linha de comando não passa por `buildDeps` —, e o
+	// comentário do `agentFactory` já avisava: "duplicar esta montagem é como as
+	// duas entradas divergem, e a que diverge em silêncio é sempre a que ninguém
+	// roda". Ligar a opção só num lado produz exatamente isso: a variável não
+	// tem efeito nenhum pela CLI, sem erro e sem aviso.
+	//
+	// Medido em 01/09/2026: liguei só na fábrica, e a opção pareceu não
+	// funcionar — o diagnóstico levou quatro tentativas porque tudo o que se
+	// checava (a variável, o binário, o código) estava certo.
+	if os.Getenv("AGENTD_VERIFY_COMPLETION") == "1" {
+		agentOptions = append(agentOptions, service.WithVerifier(verifier.New(languageModel)))
+		fmt.Fprintln(os.Stderr, "verificação de conclusão LIGADA (custa uma chamada de modelo por tarefa)")
 	}
 
 	agent := service.NewAgent(languageModel, toolset, screenDriver, taskStore, screenLock, time.Now, agentInstructions,

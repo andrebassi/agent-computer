@@ -20,6 +20,7 @@ import (
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/telemetry"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/tools"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/vault"
+	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/verifier"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driven/xai"
 	"github.com/andrebassi/agent-computer/agent/internal/adapters/driving/api"
 	"github.com/andrebassi/agent-computer/agent/internal/domain"
@@ -73,6 +74,11 @@ type deps struct {
 	tracer service.Tracer
 	// meter registra as medidas agregáveis. Nil sem endpoint configurado.
 	meter service.Meter
+	// verifier pergunta se a tarefa foi cumprida antes de deixá-la terminar.
+	//
+	// Nil por padrão — e nesse caso o serviço usa o verificador mudo dele, que
+	// aprova sem consultar nada. Só é montado com AGENTD_VERIFY_COMPLETION=1.
+	verifier service.CompletionVerifier
 	// flushMetrics esvazia as métricas pendentes antes de o processo sair.
 	//
 	// SEPARADO do flush de trechos porque os dois provedores do OpenTelemetry
@@ -237,6 +243,35 @@ func buildDeps(stateDir, modelName string, needsModel, verbose bool) (*deps, err
 		d.flushTelemetry = flush
 	}
 
+	// Verificação de conclusão, ligada por AGENTD_VERIFY_COMPLETION=1.
+	//
+	// Desligada por padrão porque muda duas coisas que ninguém pode ganhar só
+	// por atualizar o binário: o CUSTO — uma chamada de modelo a mais por
+	// tarefa, sobre um histórico resumido — e o DESFECHO, já que a tarefa passa
+	// a poder não terminar na primeira parada.
+	//
+	// Usa o MESMO modelo que executa. Um modelo diferente seria mais
+	// independente, mas exigiria segunda credencial e segunda tabela de preço; a
+	// contaminação real que preocupa é a de turno (quem acaba de dizer "pronto"
+	// confirma), e essa a conversa separada já resolve.
+	if os.Getenv("AGENTD_VERIFY_COMPLETION") == "1" {
+		if d.model == nil {
+			// Operação local (abandonar, catálogo, drenar avisos) não monta
+			// modelo. Ligar o verificador aqui daria um ponteiro nil dentro de
+			// interface não-nil, e o pânico viria na primeira verificação — no
+			// caminho menos exercitado.
+			fmt.Fprintln(os.Stderr, "aviso: AGENTD_VERIFY_COMPLETION pedido sem modelo; verificação desligada")
+		} else {
+			d.verifier = verifier.New(d.model)
+			// Dizer que está ligada não é ruído: ela custa uma chamada de modelo
+			// por tarefa e pode mudar o desfecho. Sem esta linha, a única forma
+			// de saber se a opção pegou é a tarefa se comportar diferente — e
+			// foi exatamente essa dúvida que apareceu no primeiro teste na
+			// máquina, em 01/09/2026.
+			fmt.Fprintln(os.Stderr, "verificação de conclusão LIGADA (custa uma chamada de modelo por tarefa)")
+		}
+	}
+
 	return d, nil
 }
 
@@ -301,6 +336,15 @@ func (d *deps) agentFactory() api.AgentFactory {
 			service.WithCostEstimator(d.prices, d.modelName),
 			service.WithTracer(d.tracer),
 			service.WithMeter(d.meter),
+			// Verificação de conclusão: pergunta se o pedido foi cumprido antes
+			// de deixar a tarefa terminar.
+			//
+			// Só entra quando `d.verifier` existe, e ele só existe com
+			// AGENTD_VERIFY_COMPLETION=1. É opção porque muda duas coisas que
+			// ninguém pode ganhar por atualizar o binário: o custo (uma chamada
+			// de modelo por tarefa) e o desfecho (a tarefa pode não terminar na
+			// primeira parada).
+			service.WithVerifier(d.verifier),
 			// Arma a redação com os segredos dos conectores ANEXADOS. Sem isto o
 			// mecanismo existia inteiro e percorria uma lista vazia.
 			service.WithTrackedSecrets(d.registry.SecretsFor(context.Background(), request.Connectors)))

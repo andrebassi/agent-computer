@@ -233,6 +233,30 @@ func TestValidBlockReasonCoversDocumentedSet(t *testing.T) {
 	}
 }
 
+// TestEveryValidReasonHasDescription fecha a lacuna que deixou um motivo mudo.
+//
+// O teste acima cobre só os CINCO da documentação da x.ai. Os nossos —
+// `guardrail` e `unverified` — ficavam de fora, e foi assim que `unverified`
+// chegou à máquina bloqueando tarefa com a tela dizendo "motivo desconhecido":
+// o estado estava certo, a apresentação não.
+//
+// Aqui a lista é a dos motivos VÁLIDOS, então acrescentar um sem descrever
+// reprova na hora, em vez de aparecer para quem estiver olhando a tela.
+func TestEveryValidReasonHasDescription(t *testing.T) {
+	all := []BlockReason{
+		BlockPassword, BlockTwoFactor, BlockCaptcha, BlockPaymentIdentity,
+		BlockHumanRequired, BlockGuardrail, BlockUnverified,
+	}
+	for _, reason := range all {
+		if !ValidBlockReason(reason) {
+			t.Errorf("%q está na lista mas ValidBlockReason recusa", reason)
+		}
+		if got := reason.Description(); got == "" || got == "motivo desconhecido" {
+			t.Errorf("motivo %q sem descrição útil: %q", reason, got)
+		}
+	}
+}
+
 // O motivo `guardrail` é válido, tem descrição própria, e ela NÃO se confunde
 // com a dos cinco documentados.
 //
